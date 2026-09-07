@@ -1,13 +1,13 @@
 # Stellar Protocol Canary
 
-[![CI](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+![stellar-drive-stellar-drive-protocol-canary](assets/ProtocolCanary-banner.svg)
 
 Rehearse Stellar protocol upgrades before they reach your production stack.
 
-[Documentation](https://stellar-drive.github.io/stellar-drive-stellar-drive-protocol-canary/) | [Fixtures](https://github.com/Stellar-drive/ProtocolCanary-Fixtures) | [Action](https://github.com/Stellar-drive/ProtocolCanary-Action)
+[![CI](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-![stellar-drive-stellar-drive-protocol-canary](assets/ProtocolCanary-banner.svg)
+[Documentation](https://stellar-drive.github.io/stellar-drive-stellar-drive-protocol-canary/) | [Fixtures](https://github.com/Stellar-drive/ProtocolCanary-Fixtures) | [Action](https://github.com/Stellar-drive/ProtocolCanary-Action)
 
 ## What is Protocol Canary?
 
