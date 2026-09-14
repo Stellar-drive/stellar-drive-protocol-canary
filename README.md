@@ -182,6 +182,21 @@ read operations and simulation are performed. See [SECURITY.md](SECURITY.md).
 
 See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
+## Maintainers & Community
+
+**Maintainer:** [@Hollujay](https://github.com/Hollujay) — reachable via
+this repository's GitHub profile; no other official contact channel is
+published for this project.
+
+**Community:** There is no dedicated community channel yet. Contribution
+and discussion happen through GitHub
+[issues](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/issues) and pull
+requests on this repository.
+
+**Contributors:**
+
+[![Contributors](https://contrib.rocks/image?repo=Stellar-drive/stellar-drive-stellar-drive-protocol-canary)](https://github.com/Stellar-drive/stellar-drive-stellar-drive-protocol-canary/graphs/contributors)
+
 ## Limitations
 
 A passing result means the declared compatibility assertions for the
