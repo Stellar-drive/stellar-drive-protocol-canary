@@ -265,113 +265,106 @@ mod tests {
         assert_eq!(results[1].test_id, "r");
     }
 
-    #[derive(Clone)]
-    struct ConcurrencyTracker {
-        active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl wiremock::Respond for ConcurrencyTracker {
-        fn respond(&self, _request: &wiremock::Request) -> wiremock::ResponseTemplate {
-            let current = self.active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            
-            let mut max = self.max_active.load(std::sync::atomic::Ordering::SeqCst);
-            while current > max {
-                match self.max_active.compare_exchange_weak(
-                    max, current, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst
-                ) {
-                    Ok(_) => break,
-                    Err(new_max) => max = new_max,
-                }
-            }
-            
-            let active = self.active.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            });
-            
-            wiremock::ResponseTemplate::new(200)
-                .set_delay(std::time::Duration::from_millis(50))
-                .set_body_json(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "result": { "passphrase": "Test SDF Network ; September 2015", "protocolVersion": 28 }
-                }))
-        }
+    fn soroban_fixture(id: &str, sequence_number: i64) -> SorobanFixture {
+        use stellar_strkey::{ed25519::PublicKey as StrkeyPublicKey, Contract as StrkeyContract};
+        let source_account = StrkeyPublicKey([0u8; 32]).to_string();
+        let contract_id = StrkeyContract([0u8; 32]).to_string();
+        SorobanFixture::from_loaded(
+            &parse_fixture_str(
+                &format!(
+                    "id = \"{id}\"\nprotocol = 28\nsurface = \"soroban\"\ncategory = \"cap-85\"\ndescription = \"test\"\nsource_account = \"{source_account}\"\ncontract_id = \"{contract_id}\"\nfunction = \"hello\"\nsequence_number = {sequence_number}\n\n[[args]]\nkind = \"symbol\"\nvalue = \"world\"\n\n[expect]\nkind = \"simulation-success\"\n"
+                ),
+                std::path::Path::new("s.toml"),
+            )
+            .unwrap(),
+        )
+        .unwrap()
     }
 
     #[tokio::test]
-    async fn run_rpc_bounds_concurrency_to_max() {
-        let max_concurrency = 2;
+    async fn soroban_results_are_grouped_after_rpc_results() {
         let server = MockServer::start().await;
-        
-        let tracker = ConcurrencyTracker {
-            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        };
-        
-        Mock::given(wiremock::matchers::any())
-            .respond_with(tracker.clone())
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "latestLedger": 1000, "transactionData": "AAAA" }
+            })))
             .mount(&server)
             .await;
 
-        let mut ctx = context();
-        ctx.options.max_concurrency = max_concurrency as u32;
+        let mut plan = CompatibilityPlan::default();
+        plan.rpc.push(
+            RpcFixture::from_loaded(
+                &parse_fixture_str(
+                    "id = \"r\"\nprotocol = 28\nsurface = \"rpc\"\ncategory = \"c\"\ndescription = \"d\"\nmethod = \"get-network\"\n",
+                    std::path::Path::new("r.toml"),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        plan.soroban.push(soroban_fixture("s1", 1));
+        plan.soroban.push(soroban_fixture("s2", 2));
 
-        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let mut fixtures = Vec::new();
-        for i in 0..6 {
-            fixtures.push(
-                RpcFixture::from_loaded(
-                    &parse_fixture_str(
-                        &format!("id = \"rpc_bound_{}_{}\"\nprotocol = 28\nsurface = \"rpc\"\ncategory = \"c\"\ndescription = \"d\"\nmethod = \"get-network\"\n", timestamp, i),
-                        std::path::Path::new(&format!("r{}.toml", i)),
-                    ).unwrap()
-                ).unwrap()
-            );
-        }
-
-        let client = HttpRpcClient::new(server.uri());
-        let _ = run_rpc(&fixtures, &ctx, client, max_concurrency).await;
-
-        assert_eq!(tracker.max_active.load(std::sync::atomic::Ordering::SeqCst), max_concurrency);
+        let results = execute(&plan, &context(), &server.uri()).await;
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].test_id, "r");
+        assert_eq!(results[0].surface, Surface::Rpc);
+        assert_eq!(results[1].test_id, "s1");
+        assert_eq!(results[1].surface, Surface::Soroban);
+        assert_eq!(results[2].test_id, "s2");
+        assert_eq!(results[2].surface, Surface::Soroban);
+        assert_eq!(results[2].status, Status::Pass);
     }
 
     #[tokio::test]
-    async fn run_soroban_bounds_concurrency_to_max() {
-        let max_concurrency = 2;
+    async fn soroban_results_keep_fixture_order_when_responses_finish_out_of_order() {
         let server = MockServer::start().await;
-        
-        let tracker = ConcurrencyTracker {
-            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        };
-        
-        Mock::given(wiremock::matchers::any())
-            .respond_with(tracker.clone())
+
+        let first = soroban_fixture("s1", 1);
+        let second = soroban_fixture("s2", 2);
+        // The two fixtures differ only in sequence number, so their
+        // simulation request bodies are unique and the envelope itself is
+        // a reliable request matcher.
+        let first_envelope =
+            canary_soroban::build_invoke_transaction_envelope(&first.invocation).unwrap();
+        let second_envelope =
+            canary_soroban::build_invoke_transaction_envelope(&second.invocation).unwrap();
+
+        // The first fixture's response is delayed so the second fixture's
+        // finishes first, completing out of fixture order.
+        Mock::given(wiremock::matchers::body_string_contains(first_envelope))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": { "latestLedger": 1000, "transactionData": "AAAA" }
+                    }))
+                    .set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(wiremock::matchers::body_string_contains(second_envelope))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": { "latestLedger": 1000, "transactionData": "AAAA" }
+            })))
             .mount(&server)
             .await;
 
-        let mut ctx = context();
-        ctx.options.max_concurrency = max_concurrency as u32;
+        let mut plan = CompatibilityPlan::default();
+        plan.soroban.push(first);
+        plan.soroban.push(second);
 
-        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let mut fixtures = Vec::new();
-        for i in 0..6 {
-            fixtures.push(
-                SorobanFixture::from_loaded(
-                    &parse_fixture_str(
-                        &format!("id = \"soroban_bound_{}_{}\"\nprotocol = 28\nsurface = \"soroban\"\ncategory = \"c\"\ndescription = \"d\"\nsource_account = \"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF\"\ncontract_id = \"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC\"\nfunction = \"f\"\nsequence_number = 1\n[expect]\nkind = \"simulation-success\"\n", timestamp, i),
-                        std::path::Path::new(&format!("s{}.toml", i)),
-                    ).unwrap()
-                ).unwrap()
-            );
-        }
-
-        let client = HttpRpcClient::new(server.uri());
-        let _ = run_soroban(&fixtures, &ctx, client, max_concurrency).await;
-
-        assert_eq!(tracker.max_active.load(std::sync::atomic::Ordering::SeqCst), max_concurrency);
+        let results = execute(&plan, &context(), &server.uri()).await;
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].test_id, "s1");
+        assert_eq!(results[1].test_id, "s2");
+        assert_eq!(results[0].status, Status::Pass);
+        assert_eq!(results[1].status, Status::Pass);
     }
 }
