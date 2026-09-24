@@ -192,6 +192,7 @@ pub struct RunOptions {
     pub verbose: bool,
     pub quiet: bool,
     pub max_concurrency: u32,
+    pub rpc_timeout: u64,
 }
 
 impl Default for RunOptions {
@@ -200,6 +201,7 @@ impl Default for RunOptions {
             verbose: false,
             quiet: false,
             max_concurrency: 4,
+            rpc_timeout: 10,
         }
     }
 }

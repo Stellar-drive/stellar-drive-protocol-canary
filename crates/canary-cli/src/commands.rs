@@ -72,7 +72,8 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
             })?;
         let passphrase = default_passphrase(&network_name).unwrap_or("").to_string();
 
-        let client = HttpRpcClient::new(rpc_url.clone());
+        let client = HttpRpcClient::new(rpc_url.clone())
+            .with_timeout(std::time::Duration::from_secs(args.rpc_timeout));
         let observed_protocol = client
             .get_network()
             .await
@@ -129,6 +130,7 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
             verbose: args.verbose,
             quiet: args.quiet,
             max_concurrency: 4,
+            rpc_timeout: args.rpc_timeout,
         },
     };
 

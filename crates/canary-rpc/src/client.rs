@@ -106,10 +106,20 @@ pub struct HttpRpcClient {
 impl HttpRpcClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         HttpRpcClient {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             endpoint: endpoint.into(),
             retry_policy: RetryPolicy::default(),
         }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        if let Ok(http) = reqwest::Client::builder().timeout(timeout).build() {
+            self.http = http;
+        }
+        self
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
@@ -360,5 +370,37 @@ mod tests {
             .await
             .expect("ok");
         assert!(!response.succeeded());
+    }
+
+    #[tokio::test]
+    async fn request_exceeding_timeout_produces_timeout_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(50))
+                    .set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "passphrase": "Test SDF Network ; September 2015",
+                            "protocolVersion": 28
+                        }
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        // Configure a very short timeout and max out retries to fail quickly
+        let client = HttpRpcClient::new(server.uri())
+            .with_timeout(Duration::from_millis(10))
+            .with_retry_policy(RetryPolicy {
+                max_attempts: 1,
+                base_delay: Duration::from_millis(1),
+            });
+
+        let err = client.get_network().await.unwrap_err();
+        assert!(matches!(err, RpcError::Timeout { .. }));
     }
 }
