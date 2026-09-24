@@ -264,4 +264,114 @@ mod tests {
         assert_eq!(results[0].test_id, "x");
         assert_eq!(results[1].test_id, "r");
     }
+
+    #[derive(Clone)]
+    struct ConcurrencyTracker {
+        active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl wiremock::Respond for ConcurrencyTracker {
+        fn respond(&self, _request: &wiremock::Request) -> wiremock::ResponseTemplate {
+            let current = self.active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            
+            let mut max = self.max_active.load(std::sync::atomic::Ordering::SeqCst);
+            while current > max {
+                match self.max_active.compare_exchange_weak(
+                    max, current, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst
+                ) {
+                    Ok(_) => break,
+                    Err(new_max) => max = new_max,
+                }
+            }
+            
+            let active = self.active.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            
+            wiremock::ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(50))
+                .set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": { "passphrase": "Test SDF Network ; September 2015", "protocolVersion": 28 }
+                }))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_rpc_bounds_concurrency_to_max() {
+        let max_concurrency = 2;
+        let server = MockServer::start().await;
+        
+        let tracker = ConcurrencyTracker {
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        
+        Mock::given(wiremock::matchers::any())
+            .respond_with(tracker.clone())
+            .mount(&server)
+            .await;
+
+        let mut ctx = context();
+        ctx.options.max_concurrency = max_concurrency as u32;
+
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let mut fixtures = Vec::new();
+        for i in 0..6 {
+            fixtures.push(
+                RpcFixture::from_loaded(
+                    &parse_fixture_str(
+                        &format!("id = \"rpc_bound_{}_{}\"\nprotocol = 28\nsurface = \"rpc\"\ncategory = \"c\"\ndescription = \"d\"\nmethod = \"get-network\"\n", timestamp, i),
+                        std::path::Path::new(&format!("r{}.toml", i)),
+                    ).unwrap()
+                ).unwrap()
+            );
+        }
+
+        let client = HttpRpcClient::new(server.uri());
+        let _ = run_rpc(&fixtures, &ctx, client, max_concurrency).await;
+
+        assert_eq!(tracker.max_active.load(std::sync::atomic::Ordering::SeqCst), max_concurrency);
+    }
+
+    #[tokio::test]
+    async fn run_soroban_bounds_concurrency_to_max() {
+        let max_concurrency = 2;
+        let server = MockServer::start().await;
+        
+        let tracker = ConcurrencyTracker {
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        
+        Mock::given(wiremock::matchers::any())
+            .respond_with(tracker.clone())
+            .mount(&server)
+            .await;
+
+        let mut ctx = context();
+        ctx.options.max_concurrency = max_concurrency as u32;
+
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let mut fixtures = Vec::new();
+        for i in 0..6 {
+            fixtures.push(
+                SorobanFixture::from_loaded(
+                    &parse_fixture_str(
+                        &format!("id = \"soroban_bound_{}_{}\"\nprotocol = 28\nsurface = \"soroban\"\ncategory = \"c\"\ndescription = \"d\"\nsource_account = \"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF\"\ncontract_id = \"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC\"\nfunction = \"f\"\nsequence_number = 1\n[expect]\nkind = \"simulation-success\"\n", timestamp, i),
+                        std::path::Path::new(&format!("s{}.toml", i)),
+                    ).unwrap()
+                ).unwrap()
+            );
+        }
+
+        let client = HttpRpcClient::new(server.uri());
+        let _ = run_soroban(&fixtures, &ctx, client, max_concurrency).await;
+
+        assert_eq!(tracker.max_active.load(std::sync::atomic::Ordering::SeqCst), max_concurrency);
+    }
 }
