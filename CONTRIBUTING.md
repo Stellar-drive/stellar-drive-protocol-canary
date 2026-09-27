@@ -18,7 +18,7 @@ This is a Cargo workspace. Each crate has one responsibility:
 | Crate | Responsibility |
 |---|---|
 | `canary-cli` | Command-line interface (`stellar-canary` binary) |
-| `canary-core` | Domain model, compatibility test trait, planner, policy |
+| `canary-core` | Domain model, execution context, policy |
 | `canary-config` | `.stellar-canary.toml` loading and validation |
 | `canary-project` | Project type detection |
 | `canary-fixtures` | Fixture schema, loading, validation |
@@ -40,12 +40,21 @@ other.
 cargo fmt --all --check
 cargo check --workspace --all-targets
 cargo test --workspace
+cargo test -p canary-rpc
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-All four must pass before a change is considered done. Unit tests must not
-require network access; anything that talks to a real RPC endpoint belongs
-in `tests/integration` and must be explicitly opt-in.
+Use `cargo test -p <crate>` when iterating on one crate at a time; valid crate
+names are listed in the table above (for example, `canary-rpc`). All five must
+pass before a change is considered done. Unit tests must not require network
+access; anything that talks to a real RPC endpoint belongs in `tests/integration`
+and must be explicitly opt-in.
+
+CI runs fmt, check, test, and clippy on Linux, macOS, and Windows
+(`ubuntu-latest`, `macos-latest`, `windows-latest` in
+`.github/workflows/ci.yml`), so keep changes portable across all three —
+use `std::path` APIs rather than hand-built separator strings, and don't
+assume a POSIX-only tool is on `PATH`.
 
 ## Coding standards
 
@@ -76,14 +85,20 @@ change.
 
 ## Adding a new protocol pack
 
-Protocol-specific assumptions live behind the `ProtocolPack` abstraction in
-`canary-core`, not scattered through the runners. To add support for a new
-protocol version:
+A protocol pack is just the set of fixtures that declare that protocol
+version. There is no separate registration step: `canary_runner::build_plan`
+(`crates/canary-runner/src/scheduler.rs`) decides applicability per fixture
+by comparing each fixture's `protocol` metadata field against the run's
+target protocol (`--protocol`, else `.stellar-canary.toml`'s `protocol`,
+else the default `28`). Fixtures for any other protocol are reported as
+skipped, not run. To add support for a new protocol version:
 
-1. add fixtures for the new protocol to `ProtocolCanary-Fixtures` (or the
-   local fixture directory used in development/tests);
-2. add a `ProtocolPack` entry describing which fixtures apply;
-3. do not modify or delete the previous protocol's pack or fixtures.
+1. add fixtures with `protocol = <new version>` to `ProtocolCanary-Fixtures`
+   (or the local fixture directory used in development/tests);
+2. check them with `stellar-canary fixtures --protocol <new version>`;
+3. do not modify or delete the previous protocol's fixtures.
+
+`canary_core::ProtocolPack` is not used for this (see its rustdoc).
 
 ## Adding a fixture
 

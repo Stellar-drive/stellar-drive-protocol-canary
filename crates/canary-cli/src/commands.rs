@@ -8,13 +8,24 @@ use canary_git::{collect_git_context, CliGitRepository};
 use canary_report::{
     JsonReporter, MarkdownReporter, NetworkSummary, ProjectSummary, ReportInput, TerminalReporter,
 };
-use canary_rpc::{HttpRpcClient, RpcClient};
+use canary_rpc::{validate_network_info, HttpRpcClient, RpcClient, RpcError};
 use canary_runner::EnabledSurfaces;
 
 use crate::cli::{CheckArgs, FixturesArgs, InspectArgs, OutputFormat, ReportArgs};
 use crate::network::{default_passphrase, default_rpc_url, parse_network_name};
 
 const CACHE_DIR_NAME: &str = ".stellar-canary-cache";
+
+/// Rejects `--protocol 0` the same way the config loader rejects
+/// `protocol = 0`, so the flag can't bypass that validation.
+fn validated_protocol_flag(protocol: Option<u32>) -> Result<Option<u32>, CanaryError> {
+    match protocol {
+        Some(0) => Err(CanaryError::Configuration(
+            "--protocol must be a positive protocol version number".to_string(),
+        )),
+        other => Ok(other),
+    }
+}
 
 pub async fn run_check(args: CheckArgs) -> ExitCode {
     match run_check_inner(args).await {
@@ -35,7 +46,8 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
         None => canary_config::load_from_root(&root)?.unwrap_or_default(),
     };
 
-    let target_protocol = ProtocolVersion(args.protocol.unwrap_or(config.protocol));
+    let target_protocol =
+        ProtocolVersion(validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol));
 
     let project = canary_project::detect(&root);
     let explicit_type = match config.project.project_type {
@@ -60,12 +72,39 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
             })?;
         let passphrase = default_passphrase(&network_name).unwrap_or("").to_string();
 
+        // Fetch the endpoint's network identity and compare it against
+        // what this run assumed (see `canary_rpc::validate_network_info`,
+        // the constructor of RpcError::NetworkMismatch/ProtocolMismatch):
+        //
+        // - A transport-level failure leaves `observed_protocol` as `None`
+        //   (rendered as "protocol not observed"); it does not block the
+        //   run — individual RPC/Soroban fixtures still report the outage
+        //   as execution errors.
+        // - A passphrase mismatch means `--network` and `--rpc-url` refer
+        //   to different networks: abort as a configuration error rather
+        //   than attribute results to the wrong network.
+        // - A protocol mismatch is a warning, not a failure: running a
+        //   target-protocol run against a not-yet-upgraded network is a
+        //   core upgrade-rehearsal use case, but it must be visible
+        //   rather than only an annotation in the report.
         let client = HttpRpcClient::new(rpc_url.clone());
-        let observed_protocol = client
-            .get_network()
-            .await
-            .ok()
-            .map(|info| ProtocolVersion(info.protocol_version));
+        let observed_protocol = match client.get_network().await {
+            Ok(info) => {
+                if let Err(err) = validate_network_info(&info, &passphrase, target_protocol.0) {
+                    match err {
+                        RpcError::NetworkMismatch { .. } => {
+                            return Err(CanaryError::Configuration(err.to_string()));
+                        }
+                        RpcError::ProtocolMismatch { .. } => {
+                            eprintln!("warning: {err}");
+                        }
+                        other => return Err(other.into()),
+                    }
+                }
+                Some(ProtocolVersion(info.protocol_version))
+            }
+            Err(_) => None,
+        };
 
         let context = NetworkContext {
             name: network_name.clone(),
@@ -116,7 +155,8 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
         options: RunOptions {
             verbose: args.verbose,
             quiet: args.quiet,
-            max_concurrency: 4,
+            max_concurrency: args.max_concurrency,
+            rpc_timeout: args.rpc_timeout,
         },
     };
 
@@ -235,7 +275,8 @@ fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
     println!();
 
     println!("Configured protocol: {}", config.protocol);
-    let target_protocol = ProtocolVersion(args.protocol.unwrap_or(config.protocol));
+    let target_protocol =
+        ProtocolVersion(validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol));
     println!("Target protocol for fixture plan: {target_protocol}");
     println!("Available compatibility surfaces:");
     println!(
@@ -322,7 +363,7 @@ fn run_fixtures_inner(args: FixturesArgs) -> Result<ExitCode, CanaryError> {
     let root = std::env::current_dir()
         .map_err(|e| CanaryError::Internal(format!("failed to read current directory: {e}")))?;
 
-    let protocol = match args.protocol {
+    let protocol = match validated_protocol_flag(args.protocol)? {
         Some(p) => p,
         None => {
             let config = match &args.config {

@@ -368,6 +368,32 @@ mod tests {
     }
 
     #[test]
+    fn encode_equals_fixture_with_malformed_expected_base64_fails_with_mismatch() {
+        // `expected_base64` is compared byte-for-byte as a plain string, and the
+        // fixture loader does not validate that it is syntactically valid base64.
+        // A typo'd `expected_base64` therefore currently parses fine and is
+        // reported as an ordinary encode mismatch (`Status::Fail`), not as an
+        // `InvalidFixtureBody` parse error. This test locks in that current
+        // behavior; whether it should become a parse-time error is a separate
+        // design decision.
+        let base64 = valid_stellar_value_base64();
+        let body = format!(
+            "type = \"StellarValue\"\nkind = \"encode-equals\"\nvalue_base64 = \"{base64}\"\nexpected_base64 = \"not valid base64!!!\"\n"
+        );
+        let fixture = XdrFixture::from_loaded(&loaded_fixture("p28-xdr-10", &body)).unwrap();
+        let result = DefaultXdrRunner.run(&fixture, &context()).unwrap();
+
+        assert_eq!(result.status, canary_core::Status::Fail);
+        assert_eq!(
+            result.summary,
+            "StellarValue did not encode to the expected bytes"
+        );
+        let details = result.details.expect("details should be present");
+        assert!(details.contains("expected: not valid base64!!!"));
+        assert!(details.contains(&format!("actual:   {base64}")));
+    }
+
+    #[test]
     fn rejects_a_fixture_body_missing_the_type_field() {
         let body = "kind = \"decode-success\"\nvalue_base64 = \"AAAA\"\n";
         let err = XdrFixture::from_loaded(&loaded_fixture("p28-xdr-8", body)).unwrap_err();
@@ -379,5 +405,44 @@ mod tests {
         let body = "type = \"StellarValue\"\nkind = \"not-a-kind\"\nvalue_base64 = \"AAAA\"\n";
         let err = XdrFixture::from_loaded(&loaded_fixture("p28-xdr-9", body)).unwrap_err();
         assert!(matches!(err, XdrError::InvalidFixtureBody { .. }));
+    }
+
+    /// `LedgerEntry` is a real XDR type name — just not one of the ones
+    /// this tool supports. The rejection must surface through fixture
+    /// parsing with `XdrTypeName::from_str`'s supported-types list intact,
+    /// so a fixture author can self-correct from the error alone.
+    #[test]
+    fn rejects_a_well_formed_but_unsupported_xdr_type_name_and_lists_the_supported_ones() {
+        let body = "type = \"LedgerEntry\"\nkind = \"decode-success\"\nvalue_base64 = \"AAAA\"\n";
+        let err = XdrFixture::from_loaded(&loaded_fixture("p28-xdr-10", body)).unwrap_err();
+        match err {
+            XdrError::InvalidFixtureBody { reason, .. } => {
+                assert!(reason.contains("LedgerEntry"), "reason: {reason}");
+                for supported in ["StellarValue", "ContractExecutable", "ScVal"] {
+                    assert!(
+                        reason.contains(supported),
+                        "reason must list supported type {supported:?}: {reason}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_fixture_fails_for_non_canonical_input() {
+        // A non-canonical boolean in ScVal: ScVal::B(true) encoded with non-canonical 2 instead of 1.
+        let input_base64 = "AAAAAAAAAAI=";
+        let expected_output = "AAAAAAAAAAA=";
+
+        let body =
+            format!("type = \"ScVal\"\nkind = \"roundtrip\"\nvalue_base64 = \"{input_base64}\"\n");
+        let fixture =
+            XdrFixture::from_loaded(&loaded_fixture("p28-xdr-roundtrip-fail", &body)).unwrap();
+        let result = DefaultXdrRunner.run(&fixture, &context()).unwrap();
+
+        assert_eq!(result.status, canary_core::Status::Fail);
+        let details = result.details.expect("details should be present");
+        assert!(details.contains(input_base64));
+        assert!(details.contains(expected_output));
     }
 }
