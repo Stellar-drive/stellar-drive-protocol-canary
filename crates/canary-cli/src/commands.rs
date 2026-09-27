@@ -445,3 +445,25 @@ pub fn run_version() -> ExitCode {
     println!("stellar-canary {}", env!("CARGO_PKG_VERSION"));
     ExitCode::Pass
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validated_protocol_flag_passes_through_absent_and_positive_values() {
+        assert_eq!(validated_protocol_flag(None).unwrap(), None);
+        assert_eq!(validated_protocol_flag(Some(1)).unwrap(), Some(1));
+        assert_eq!(validated_protocol_flag(Some(24)).unwrap(), Some(24));
+    }
+
+    #[test]
+    fn validated_protocol_flag_rejects_zero_with_configuration_error() {
+        let err = validated_protocol_flag(Some(0)).unwrap_err();
+        assert!(
+            matches!(&err, CanaryError::Configuration(message)
+                if message.contains("--protocol must be a positive")),
+            "unexpected error: {err}"
+        );
+    }
+}
