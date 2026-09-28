@@ -439,6 +439,16 @@ mod tests {
     }
 
     #[test]
+    fn omits_the_skipped_field_entirely_when_nothing_was_skipped() {
+        let mut input = input();
+        input.skipped.clear();
+        let json_text = JsonReporter::render(&input);
+        let value: serde_json::Value = serde_json::from_str(&json_text).unwrap();
+        assert!(value.get("skipped").is_none());
+        assert_eq!(value["counts"]["skipped"], 0);
+    }
+
+    #[test]
     fn output_is_deterministic_for_the_same_input() {
         let a = JsonReporter::render(&input());
         let b = JsonReporter::render(&input());
