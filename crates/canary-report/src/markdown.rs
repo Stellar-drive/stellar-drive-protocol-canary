@@ -184,4 +184,18 @@ mod tests {
         let text = MarkdownReporter::render(&input);
         assert!(text.contains("Skipped 1 fixture(s)."));
     }
+
+    #[test]
+    fn omits_skipped_fixture_line_when_nothing_was_skipped() {
+        let input = base_input(
+            vec![result("p28-xdr-1", Surface::Xdr, Status::Pass)],
+            PolicyDecision::Pass,
+        );
+        assert!(input.skipped.is_empty());
+        let text = MarkdownReporter::render(&input);
+        assert!(
+            !text.contains("Skipped"),
+            "unexpected skip line in:\n{text}"
+        );
+    }
 }
