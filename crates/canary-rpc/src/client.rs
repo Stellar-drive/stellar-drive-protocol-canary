@@ -468,6 +468,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retries_a_transient_failure_and_returns_the_successful_response() {
+        let server = MockServer::start().await;
+        // First request: a transient 503. `up_to_n_times(1)` stops this mock
+        // from matching afterwards, so the retried request falls through to
+        // the success mock mounted below (same-priority mocks match in
+        // insertion order).
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .named("transient 503")
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "passphrase": "Test SDF Network ; September 2015",
+                    "protocolVersion": 28
+                }
+            })))
+            .named("successful retry")
+            .mount(&server)
+            .await;
+
+        let client = HttpRpcClient::new(server.uri()).with_retry_policy(RetryPolicy {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(1),
+        });
+        let info = client.get_network().await.expect("retry succeeds");
+        assert_eq!(info.protocol_version, 28);
+        assert_eq!(info.passphrase, "Test SDF Network ; September 2015");
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
     async fn simulate_transaction_reports_a_host_error() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
