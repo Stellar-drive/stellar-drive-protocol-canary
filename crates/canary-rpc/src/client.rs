@@ -381,6 +381,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maps_missing_result_and_error_keys_to_invalid_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = HttpRpcClient::new(server.uri());
+        let err = client.get_network().await.unwrap_err();
+        assert!(matches!(
+            err,
+            RpcError::InvalidResponse { ref reason, .. } if reason.contains("neither \"result\" nor \"error\"")
+        ));
+    }
+
+    #[tokio::test]
+    async fn maps_deserialization_failure_to_invalid_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "protocolVersion": 28
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = HttpRpcClient::new(server.uri());
+        let err = client.get_network().await.unwrap_err();
+        assert!(matches!(
+            err,
+            RpcError::InvalidResponse { ref reason, .. } if reason.contains("missing field `passphrase`")
+        ));
+    }
+
+    #[tokio::test]
     async fn retries_server_errors_up_to_the_configured_attempt_limit() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
