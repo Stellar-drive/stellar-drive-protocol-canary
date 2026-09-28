@@ -208,6 +208,8 @@ mod tests {
 
     #[test]
     fn supports_scalar_argument_types() {
+        use stellar_xdr::ReadXdr;
+
         let mut spec = spec();
         spec.args = vec![
             ScValInput::Bool(true),
@@ -217,6 +219,30 @@ mod tests {
             ScValInput::I64(-2),
             ScValInput::String("hi".to_string()),
         ];
-        assert!(build_invoke_transaction_envelope(&spec).is_ok());
+        let base64 = build_invoke_transaction_envelope(&spec).expect("builds");
+        let envelope = TransactionEnvelope::from_xdr_base64(&base64, Limits::none())
+            .expect("the built envelope must be valid XDR");
+        let TransactionEnvelope::Tx(envelope) = envelope else {
+            panic!("expected a transaction envelope");
+        };
+        let operation = envelope.tx.operations.first().expect("one operation");
+        let OperationBody::InvokeHostFunction(invoke) = &operation.body else {
+            panic!("expected an invoke host function operation");
+        };
+        let HostFunction::InvokeContract(invoke_args) = &invoke.host_function else {
+            panic!("expected an invoke contract host function");
+        };
+
+        assert_eq!(
+            &invoke_args.args[..],
+            &[
+                ScVal::Bool(true),
+                ScVal::U32(1),
+                ScVal::I32(-1),
+                ScVal::U64(2),
+                ScVal::I64(-2),
+                ScVal::String(ScString("hi".try_into().expect("valid XDR string"))),
+            ]
+        );
     }
 }
