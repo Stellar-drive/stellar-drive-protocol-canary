@@ -179,14 +179,36 @@ impl From<&ReportInput> for JsonReport {
     }
 }
 
+/// Why a rendered JSON report could not be read back into a
+/// [`ReportInput`], as returned by [`JsonReporter::parse`].
+///
+/// The variants separate input this version cannot even decode
+/// ([`JsonReportError::Parse`]) from input that is well-formed but was
+/// produced by a different version of the tool
+/// ([`JsonReportError::UnsupportedSchemaVersion`]) or carries an enum
+/// spelling introduced after this version was built
+/// ([`JsonReportError::UnknownSurface`], [`JsonReportError::UnknownStatus`]).
 #[derive(Debug, thiserror::Error)]
 pub enum JsonReportError {
+    /// The text is not valid JSON, or it does not match the report
+    /// schema: a field is missing, has the wrong type, or is otherwise
+    /// rejected by the deserializer.
     #[error("failed to parse JSON report: {0}")]
     Parse(#[from] serde_json::Error),
+
+    /// The report was written against a schema version other than
+    /// [`SCHEMA_VERSION`]: `found` is the version in the document,
+    /// `expected` is the one this build understands.
     #[error("unsupported schema version (found {found}, expected {expected})")]
     UnsupportedSchemaVersion { found: u32, expected: u32 },
+
+    /// A result or skipped entry names a surface this version does not
+    /// know; the offending spelling is carried for the error message.
     #[error("unrecognized surface {0:?} in JSON report")]
     UnknownSurface(String),
+
+    /// A result entry names a status this version does not know; the
+    /// offending spelling is carried for the error message.
     #[error("unrecognized status {0:?} in JSON report")]
     UnknownStatus(String),
 }
