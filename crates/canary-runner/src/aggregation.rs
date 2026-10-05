@@ -1,4 +1,13 @@
 //! Summarizing a set of [`CompatibilityResult`]s.
+//!
+//! This module is public API intended for **external consumers of
+//! `canary-runner`** — for example a CI integration or dashboard that runs
+//! the scheduler itself and wants aggregate counts without depending on
+//! the `canary-cli` binary. The CLI's own reporters deliberately do not
+//! use it: `canary-report` computes its JSON counts independently so that
+//! it never depends on this crate (see the comment on `JsonCounts` in
+//! `canary-report/src/json.rs`). The two count structures are kept in sync
+//! by hand.
 
 use canary_core::{CompatibilityResult, Status};
 
@@ -6,6 +15,16 @@ use canary_core::{CompatibilityResult, Status};
 ///
 /// Skipped fixtures are never included here: they are neither pass nor
 /// fail and are tracked separately by the planner.
+///
+/// # Examples
+///
+/// ```
+/// use canary_runner::summarize;
+///
+/// let summary = summarize(&[]);
+/// assert_eq!(summary.passed_fraction(), (0, 0));
+/// assert!(!summary.has_required_failure());
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResultSummary {
     pub total: usize,
