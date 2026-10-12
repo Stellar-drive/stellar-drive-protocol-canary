@@ -37,9 +37,19 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+/// Selects the renderer used for a compatibility report.
+///
+/// The `--format` flag accepts these variants using their kebab-case names.
+/// `Terminal` is the human-readable default, `Json` produces the versioned
+/// machine-readable report consumed by automation, and `Markdown` produces
+/// the report shape used in job summaries and pull-request comments. The
+/// `--json` shorthand on `check` selects [`OutputFormat::Json`] explicitly.
 pub enum OutputFormat {
+    /// Human-readable output for an interactive terminal.
     Terminal,
+    /// Versioned JSON output for automation and report persistence.
     Json,
+    /// Markdown output for summaries and pull-request comments.
     Markdown,
 }
 
