@@ -16,6 +16,13 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+/// Top-level commands accepted by the `stellar-canary` CLI.
+///
+/// `Check` runs compatibility assertions, while `Inspect` and `Fixtures`
+/// provide offline project and fixture information. `Report` renders a
+/// previously generated JSON report, and `Version` prints the tool version.
+/// Parsing this enum is handled by `clap`; the variants themselves do not
+/// perform I/O or panic during argument parsing.
 pub enum Command {
     /// Run compatibility checks against the current project.
     Check(CheckArgs),
@@ -30,9 +37,19 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+/// Selects the renderer used for a compatibility report.
+///
+/// The `--format` flag accepts these variants using their kebab-case names.
+/// `Terminal` is the human-readable default, `Json` produces the versioned
+/// machine-readable report consumed by automation, and `Markdown` produces
+/// the report shape used in job summaries and pull-request comments. The
+/// `--json` shorthand on `check` selects [`OutputFormat::Json`] explicitly.
 pub enum OutputFormat {
+    /// Human-readable output for an interactive terminal.
     Terminal,
+    /// Versioned JSON output for automation and report persistence.
     Json,
+    /// Markdown output for summaries and pull-request comments.
     Markdown,
 }
 
