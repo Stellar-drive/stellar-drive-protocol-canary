@@ -16,6 +16,13 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+/// Top-level commands accepted by the `stellar-canary` CLI.
+///
+/// `Check` runs compatibility assertions, while `Inspect` and `Fixtures`
+/// provide offline project and fixture information. `Report` renders a
+/// previously generated JSON report, and `Version` prints the tool version.
+/// Parsing this enum is handled by `clap`; the variants themselves do not
+/// perform I/O or panic during argument parsing.
 pub enum Command {
     /// Run compatibility checks against the current project.
     Check(CheckArgs),
