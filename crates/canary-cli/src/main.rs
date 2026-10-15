@@ -2,6 +2,7 @@
 
 mod cli;
 mod commands;
+mod inspect_json;
 mod network;
 
 use clap::Parser;

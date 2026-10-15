@@ -13,7 +13,8 @@ use canary_report::{
 use canary_rpc::{validate_network_info, HttpRpcClient, RpcClient, RpcError};
 use canary_runner::EnabledSurfaces;
 
-use crate::cli::{CheckArgs, FixturesArgs, InspectArgs, OutputFormat, ReportArgs};
+use crate::cli::{CheckArgs, FixturesArgs, InspectArgs, InspectFormat, OutputFormat, ReportArgs};
+use crate::inspect_json;
 use crate::network::{default_passphrase, default_rpc_url, parse_network_name};
 
 const CACHE_DIR_NAME: &str = ".stellar-canary-cache";
@@ -319,13 +320,35 @@ pub fn run_inspect(args: InspectArgs) -> ExitCode {
     }
 }
 
-fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
+/// Everything `inspect` resolves before choosing a renderer, so the
+/// terminal and JSON paths agree on one set of facts.
+struct InspectSetup {
+    root: std::path::PathBuf,
+    config: canary_config::ConfigFile,
+    /// The configuration file that was read, if any. Decides
+    /// `config.found`, `config.path` and `target.source` in the JSON
+    /// document, so "no file found" stays `None` rather than being
+    /// collapsed into a default config.
+    config_file: Option<std::path::PathBuf>,
+    detected: canary_core::ProjectContext,
+    /// [`InspectSetup::detected`] with the resolved (effective) type.
+    project: canary_core::ProjectContext,
+    explicit_type: Option<canary_core::ProjectType>,
+    target_protocol: ProtocolVersion,
+    /// `flag`, `config` or `default` (CA-03).
+    target_source: &'static str,
+}
+
+fn inspect_setup(args: &InspectArgs) -> Result<InspectSetup, CanaryError> {
     let root = std::env::current_dir()
         .map_err(|e| CanaryError::Internal(format!("failed to read current directory: {e}")))?;
 
-    let config = match &args.config {
-        Some(path) => canary_config::load(path)?,
-        None => canary_config::load_from_root(&root)?.unwrap_or_default(),
+    let (config, config_file) = match &args.config {
+        Some(path) => (canary_config::load(path)?, Some(path.clone())),
+        None => match canary_config::load_from_root(&root)? {
+            Some(config) => (config, Some(root.join(canary_config::CONFIG_FILE_NAME))),
+            None => (canary_config::ConfigFile::default(), None),
+        },
     };
 
     let detected = canary_project::detect(&root);
@@ -336,6 +359,89 @@ fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
     let resolved_type = canary_project::resolve_project_type(detected.project_type, explicit_type);
     let mut project = detected.clone();
     project.project_type = resolved_type;
+
+    let target_source = if args.protocol.is_some() {
+        "flag"
+    } else if config_file.is_some() {
+        "config"
+    } else {
+        "default"
+    };
+    let target_protocol =
+        ProtocolVersion(validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol));
+
+    Ok(InspectSetup {
+        root,
+        config,
+        config_file,
+        detected,
+        project,
+        explicit_type,
+        target_protocol,
+        target_source,
+    })
+}
+
+fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
+    let setup = inspect_setup(&args)?;
+
+    let format = if args.json {
+        InspectFormat::Json
+    } else {
+        args.format
+    };
+    match format {
+        InspectFormat::Terminal => run_inspect_terminal(&args, setup)?,
+        InspectFormat::Json => run_inspect_json(&args, setup)?,
+    }
+
+    Ok(ExitCode::Pass)
+}
+
+/// Loads the fixture directory and builds the plan, the one step both
+/// renderers share.
+fn inspect_plan(
+    args: &InspectArgs,
+    setup: &InspectSetup,
+) -> Result<
+    (
+        Vec<canary_fixtures::LoadedFixture>,
+        canary_runner::CompatibilityPlan,
+    ),
+    CanaryError,
+> {
+    let loaded_fixtures = if args.fixtures_dir.is_dir() {
+        canary_fixtures::load_directory(&args.fixtures_dir)?
+    } else {
+        Vec::new()
+    };
+    let _fixture_store = canary_fixtures::validate(&loaded_fixtures)?;
+    let enabled = EnabledSurfaces {
+        xdr: setup.config.tests.xdr,
+        rpc: setup.config.tests.rpc,
+        soroban: setup.config.tests.soroban,
+    };
+    let plan = canary_runner::build_plan(
+        &loaded_fixtures,
+        setup.target_protocol,
+        enabled,
+        &setup.project,
+    )?;
+    Ok((loaded_fixtures, plan))
+}
+
+/// The original human-readable output, unchanged byte for byte
+/// (CA-03 section 2 makes `terminal` the documented default).
+fn run_inspect_terminal(args: &InspectArgs, setup: InspectSetup) -> Result<(), CanaryError> {
+    let InspectSetup {
+        root,
+        config,
+        detected,
+        explicit_type,
+        target_protocol,
+        ..
+    } = &setup;
+    let resolved_type = setup.project.project_type;
 
     println!("Project root: {}", root.display());
     println!("Project type: {resolved_type}");
@@ -366,8 +472,6 @@ fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
     println!();
 
     println!("Configured protocol: {}", config.protocol);
-    let target_protocol =
-        ProtocolVersion(validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol));
     println!("Target protocol for fixture plan: {target_protocol}");
     println!("Available compatibility surfaces:");
     println!(
@@ -395,18 +499,7 @@ fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
         }
     );
 
-    let loaded_fixtures = if args.fixtures_dir.is_dir() {
-        canary_fixtures::load_directory(&args.fixtures_dir)?
-    } else {
-        Vec::new()
-    };
-    let _fixture_store = canary_fixtures::validate(&loaded_fixtures)?;
-    let enabled = EnabledSurfaces {
-        xdr: config.tests.xdr,
-        rpc: config.tests.rpc,
-        soroban: config.tests.soroban,
-    };
-    let plan = canary_runner::build_plan(&loaded_fixtures, target_protocol, enabled, &project)?;
+    let (_loaded_fixtures, plan) = inspect_plan(args, &setup)?;
 
     println!();
     println!("Fixture compatibility plan (offline):");
@@ -437,7 +530,144 @@ fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
         }
     }
 
-    Ok(ExitCode::Pass)
+    Ok(())
+}
+
+/// Prints the CA-03 document to stdout and nothing else.
+fn run_inspect_json(args: &InspectArgs, setup: InspectSetup) -> Result<(), CanaryError> {
+    let (loaded_fixtures, plan) = inspect_plan(args, &setup)?;
+
+    let check_would_refuse = plan.applicable_count() == 0;
+    let refusal = check_would_refuse.then(|| {
+        canary_runner::explain_empty_plan(
+            &plan,
+            &loaded_fixtures,
+            setup.target_protocol,
+            &args.fixtures_dir,
+        )
+    });
+
+    // Execution order is XDR, then RPC, then Soroban, each in planned
+    // order (see `canary_runner::execute`); `wouldRun` mirrors it so a
+    // consumer can compare it against a report's `results`.
+    let would_run = plan
+        .xdr
+        .iter()
+        .map(|fixture| inspect_json::PlannedFixture {
+            id: fixture.metadata.id.clone(),
+            surface: canary_core::Surface::Xdr.to_string(),
+        })
+        .chain(plan.rpc.iter().map(|fixture| inspect_json::PlannedFixture {
+            id: fixture.metadata.id.clone(),
+            surface: canary_core::Surface::Rpc.to_string(),
+        }))
+        .chain(
+            plan.soroban
+                .iter()
+                .map(|fixture| inspect_json::PlannedFixture {
+                    id: fixture.metadata.id.clone(),
+                    surface: canary_core::Surface::Soroban.to_string(),
+                }),
+        )
+        .collect();
+
+    let skipped = plan
+        .skipped
+        .iter()
+        .map(|skipped| inspect_json::PlannedSkip {
+            id: skipped.fixture_id.clone(),
+            surface: skipped.surface.to_string(),
+            code: skipped.cause.code().to_string(),
+            reason: skipped.reason.clone(),
+        })
+        .collect();
+
+    let mut capabilities: Vec<String> = setup
+        .detected
+        .capabilities
+        .iter()
+        .map(|capability| inspect_json::capability_name(capability).to_string())
+        .collect();
+    capabilities.sort();
+
+    let document = inspect_json::InspectDocument {
+        inspect_version: inspect_json::INSPECT_VERSION,
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        offline: true,
+        project: inspect_json::InspectProject {
+            // The command inspects the directory it was started in, so
+            // the root is `.` relative to where a consumer stands.
+            root: ".".to_string(),
+            root_selected_by: "current-directory".to_string(),
+            project_type: setup.project.project_type.to_string(),
+            type_source: if setup.explicit_type.is_some() {
+                "config"
+            } else {
+                "detected"
+            }
+            .to_string(),
+            detected_type: setup.detected.project_type.to_string(),
+            capabilities,
+        },
+        config: inspect_json::InspectConfig {
+            found: setup.config_file.is_some(),
+            path: setup
+                .config_file
+                .as_deref()
+                .and_then(|path| relative_to_root(&setup.root, path)),
+            version: setup.config.version,
+            protocol: setup.config.protocol,
+            project_type: match setup.config.project.project_type {
+                canary_config::ProjectTypeSetting::Auto => "auto".to_string(),
+                canary_config::ProjectTypeSetting::Explicit(t) => t.to_string(),
+            },
+            tests: inspect_json::InspectTests {
+                xdr: setup.config.tests.xdr,
+                rpc: setup.config.tests.rpc,
+                soroban: setup.config.tests.soroban,
+            },
+            policy: inspect_json::InspectPolicy {
+                warnings_are_failures: setup.config.policy.warnings_are_failures,
+            },
+        },
+        target: inspect_json::InspectTarget {
+            protocol: setup.target_protocol.0,
+            source: setup.target_source.to_string(),
+        },
+        fixtures: inspect_json::InspectFixtures {
+            directory_found: args.fixtures_dir.is_dir(),
+            loaded: loaded_fixtures.len(),
+        },
+        plan: inspect_json::InspectPlan {
+            would_run,
+            skipped,
+            check_would_refuse,
+            refusal,
+        },
+    };
+
+    println!("{}", inspect_json::render(&document));
+    Ok(())
+}
+
+/// Renders `path` relative to `root` with `/` separators, or `None`
+/// when it lies outside the root (the location is not disclosed, CA-03
+/// section 3).
+fn relative_to_root(root: &Path, path: &Path) -> Option<String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let relative = absolute.strip_prefix(root).ok()?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_str()?.to_string()),
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// Lists available compatibility fixtures for a protocol version.
@@ -639,6 +869,8 @@ mod tests {
             protocol,
             fixtures_dir: PathBuf::from(fixtures_dir),
             config: config.map(PathBuf::from),
+            format: crate::cli::InspectFormat::Terminal,
+            json: false,
         }
     }
 

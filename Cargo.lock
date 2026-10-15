@@ -138,6 +138,7 @@ dependencies = [
  "canary-rpc",
  "canary-runner",
  "clap",
+ "serde",
  "serde_json",
  "tokio",
  "wiremock",

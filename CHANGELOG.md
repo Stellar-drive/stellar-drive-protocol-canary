@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `stellar-canary inspect --format json` (and the `--json` shorthand): the
+  versioned `inspectVersion: 1` document of CA-03 — project type and
+  capabilities, the effective configuration, the target protocol and its
+  source, and the fixture plan with `wouldRun`, `skipped` (with the stable
+  `code`), `checkWouldRefuse` and `refusal`. The command stays offline and the
+  `terminal` output is unchanged, byte for byte.
+- The inspect/check parity suite (issue #485, unit CA-03-D): asserts that the
+  ids *and order* in `inspect`'s `plan.wouldRun` equal the `results` a
+  `check --format json` run executes, that skips match too, and that a
+  discrepancy fails with a message naming both lists.
+
 ## [0.2.0] - 2026-10-09
 
 `0.1.1` stays published and unchanged.

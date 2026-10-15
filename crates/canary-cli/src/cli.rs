@@ -127,6 +127,20 @@ pub struct CheckArgs {
     pub live_cache_ttl: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+/// Selects the renderer used by `inspect`.
+///
+/// `Terminal` is today's human-readable output, byte for byte. `Json`
+/// prints the versioned CA-03 document for CI pipelines and tooling.
+/// `markdown` is deliberately not accepted here: `inspect` renders no
+/// report.
+pub enum InspectFormat {
+    /// Human-readable output for an interactive terminal.
+    Terminal,
+    /// Versioned JSON output (CA-03) for automation.
+    Json,
+}
+
 #[derive(Debug, Parser)]
 pub struct InspectArgs {
     /// Target protocol version (overrides configuration).
@@ -141,6 +155,14 @@ pub struct InspectArgs {
     /// project root).
     #[arg(long)]
     pub config: Option<PathBuf>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = InspectFormat::Terminal)]
+    pub format: InspectFormat,
+
+    /// Shorthand for --format json.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Parser)]
