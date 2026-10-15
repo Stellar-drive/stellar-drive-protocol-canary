@@ -5,6 +5,7 @@
 //! already decided by `canary_core::PolicyEvaluator` before a report is
 //! ever rendered.
 
+pub mod diff;
 pub mod json;
 pub mod markdown;
 pub mod terminal;

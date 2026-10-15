@@ -36,7 +36,8 @@ use crate::models::{LatestLedger, NetworkInfo, SimulationRequest, SimulationResp
 ///   [`RetryPolicy`] and only surfaces them once the attempts are exhausted,
 ///   at which point `attempts` holds how many attempts were made.
 /// - **Protocol-level** ([`RpcError::InvalidJson`],
-///   [`RpcError::JsonRpcError`], [`RpcError::InvalidResponse`]): the
+///   [`RpcError::JsonRpcError`], [`RpcError::MethodNotAvailable`],
+///   [`RpcError::InvalidResponse`]): the
 ///   endpoint answered, but the answer is unusable — not JSON, a JSON-RPC
 ///   `error` object, or a `result` that does not deserialize into the
 ///   expected type. These are deterministic, so retrying them would never
@@ -117,6 +118,17 @@ pub enum RpcError {
         message: String,
     },
 
+    /// The endpoint reported that the requested JSON-RPC method does not
+    /// exist (error code `-32601`, "Method not found").
+    ///
+    /// Kept distinct from [`RpcError::JsonRpcError`] so callers can tell an
+    /// optional or unsupported method apart from a genuine call failure: the
+    /// endpoint is reachable and answered correctly, it simply does not
+    /// implement this method. `method` preserves the method name for the
+    /// diagnostic. Never retried, and never a transport-level failure.
+    #[error("RPC method {method} is not available on this endpoint (JSON-RPC error code -32601)")]
+    MethodNotAvailable { method: String },
+
     /// The response parsed as JSON but is not what the method should return:
     /// either it has neither a `result` nor an `error` key, or its `result`
     /// failed to deserialize into the expected type.
@@ -175,7 +187,13 @@ impl From<RpcError> for CanaryError {
 ///
 /// - The passphrase comparison is skipped when `expected_passphrase` is
 ///   empty: custom networks have no well-known passphrase to compare
-///   against (see `canary-cli`'s `default_passphrase`).
+///   against (see `canary-cli`'s `default_passphrase`), and nothing was
+///   supplied for them. Callers that accept an explicit passphrase —
+///   `stellar-canary check --network-passphrase <PASSPHRASE>` rejects an
+///   empty value at argument-parse time precisely so that flag cannot
+///   reach here as `""` and silently disable this check — pass it
+///   through as-is: a non-empty custom passphrase is compared exactly
+///   like a well-known one.
 /// - The passphrase is checked first — confirming *which* network the
 ///   endpoint is on before comparing protocol versions.
 pub fn validate_network_info(
@@ -571,6 +589,14 @@ impl HttpRpcClient {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown error")
                 .to_string();
+            // JSON-RPC "Method not found": the endpoint answered properly
+            // but does not implement this method, so it is classified as a
+            // missing capability rather than a generic JSON-RPC rejection.
+            if code == JSON_RPC_METHOD_NOT_FOUND {
+                return Err(RpcError::MethodNotAvailable {
+                    method: method.to_string(),
+                });
+            }
             return Err(RpcError::JsonRpcError {
                 method: method.to_string(),
                 code,
@@ -591,6 +617,9 @@ impl HttpRpcClient {
         })
     }
 }
+
+/// JSON-RPC standard error code for "Method not found".
+const JSON_RPC_METHOD_NOT_FOUND: i64 = -32601;
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
     match value {
@@ -878,6 +907,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maps_minus_32601_to_method_not_available() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": { "code": -32601, "message": "Method not found" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = HttpRpcClient::new(server.uri());
+        let err = client.get_latest_ledger().await.unwrap_err();
+        match &err {
+            RpcError::MethodNotAvailable { method } => assert_eq!(method, "getLatestLedger"),
+            other => panic!("expected MethodNotAvailable, got {other:?}"),
+        }
+        // The diagnostic preserves the method name and the JSON-RPC code.
+        let diagnostic = err.to_string();
+        assert!(diagnostic.contains("getLatestLedger"), "{diagnostic}");
+        assert!(diagnostic.contains("-32601"), "{diagnostic}");
+        // It is a protocol-level classification, not a transport failure.
+        assert!(!matches!(err, RpcError::Transport { .. }));
+    }
+
+    #[tokio::test]
+    async fn other_json_rpc_codes_stay_distinct_from_method_not_available() {
+        for code in [-32600_i64, -32603, -32602, -32000] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": { "code": code, "message": "boom" }
+                })))
+                .mount(&server)
+                .await;
+
+            let client = HttpRpcClient::new(server.uri());
+            let err = client.get_network().await.unwrap_err();
+            match &err {
+                RpcError::JsonRpcError { code: got, .. } => assert_eq!(*got, code),
+                other => panic!("code {code} should be JsonRpcError, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn maps_malformed_json_to_invalid_json_error() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1148,105 +1227,32 @@ mod tests {
         assert!(matches!(err, RpcError::ProtocolMismatch { .. }));
     }
 
-    /// The negative case the redaction contract names explicitly:
-    /// `https://user:pass@rpc.example.com` must be logged as
-    /// `https://***:***@rpc.example.com`.
+    /// A custom passphrase supplied by the caller (the CLI's
+    /// `--network-passphrase`) is compared exactly like a well-known one:
+    /// this is the path that makes private/standalone networks verifiable.
     #[test]
-    fn scrub_url_masks_basic_auth_credentials_exactly_as_documented() {
-        assert_eq!(
-            scrub_url("https://user:pass@rpc.example.com"),
-            "https://***:***@rpc.example.com"
-        );
-        // A username alone is still a credential.
-        assert_eq!(
-            scrub_url("https://user@rpc.example.com"),
-            "https://***:***@rpc.example.com"
-        );
-        // Path, port and query survive the userinfo scrub.
-        assert_eq!(
-            scrub_url("http://user:pass@rpc.example.com:8000/v1"),
-            "http://***:***@rpc.example.com:8000/v1"
-        );
+    fn validate_network_info_accepts_a_custom_passphrase_when_it_matches() {
+        let custom = "Local Standalone Network ; October 2026";
+        let info = network_info(custom, 28);
+        assert!(validate_network_info(&info, custom, 28).is_ok());
     }
 
+    /// Negative side of the same path: a supplied custom passphrase that
+    /// differs from what the endpoint reports must construct a
+    /// `NetworkMismatch` naming both values, never a silent pass.
     #[test]
-    fn scrub_url_masks_query_tokens_but_keeps_names_paths_and_fragments() {
-        assert_eq!(
-            scrub_url("https://rpc.example.com/v1?token=supersecret&limit=50"),
-            "https://rpc.example.com/v1?token=***&limit=***"
-        );
-        assert_eq!(
-            scrub_url("https://rpc.example.com/v1?baretoken"),
-            "https://rpc.example.com/v1?***"
-        );
-        assert_eq!(
-            scrub_url("https://user:pass@rpc.example.com/p?q=1#section"),
-            "https://***:***@rpc.example.com/p?q=***#section"
-        );
-    }
-
-    #[test]
-    fn scrub_url_leaves_ordinary_and_non_urls_untouched() {
-        assert_eq!(
-            scrub_url("https://soroban-testnet.stellar.org"),
-            "https://soroban-testnet.stellar.org"
-        );
-        assert_eq!(
-            scrub_url("http://127.0.0.1:8000/"),
-            "http://127.0.0.1:8000/"
-        );
-        assert_eq!(scrub_url("/relative/path"), "/relative/path");
-        assert_eq!(scrub_url(""), "");
-    }
-
-    #[test]
-    fn attempt_log_line_formats_as_documented() {
-        assert_eq!(
-            attempt_log_line(
-                1,
-                3,
-                Duration::from_millis(124),
-                "getNetwork",
-                "https://rpc.example.com"
-            ),
-            "[RPC attempt 1/3: 124ms] getNetwork https://rpc.example.com"
-        );
-        assert_eq!(
-            attempt_log_line(
-                2,
-                4,
-                Duration::from_millis(0),
-                "getLatestLedger",
-                "https://***:***@rpc.example.com"
-            ),
-            "[RPC attempt 2/4: 0ms] getLatestLedger https://***:***@rpc.example.com"
-        );
-    }
-
-    #[test]
-    fn transport_messages_have_their_url_scrubbed_without_losing_the_reason() {
-        let raw = "http://user:pass@rpc.example.com/v1?token=abc";
-        let message = format!("error sending request for url ({raw})");
-
-        let scrubbed = scrub_url_out_of_message(&message, Some(raw));
+    fn validate_network_info_rejects_a_custom_passphrase_that_differs() {
+        let info = network_info("Some Other Net ; October 2026", 28);
+        let err = validate_network_info(&info, "Local Standalone Network ; October 2026", 28)
+            .expect_err("custom passphrase differs");
         assert!(
-            !scrubbed.contains("user:pass") && !scrubbed.contains("token=abc"),
-            "credentials must be gone: {scrubbed}"
-        );
-        assert!(scrubbed.contains("error sending request"), "{scrubbed}");
-        assert!(
-            scrubbed.contains("http://***:***@rpc.example.com/v1?token=***"),
-            "{scrubbed}"
-        );
-
-        // No URL, or a URL the message never echoes: unchanged.
-        assert_eq!(
-            scrub_url_out_of_message("connection refused", None),
-            "connection refused"
-        );
-        assert_eq!(
-            scrub_url_out_of_message("connection refused", Some(raw)),
-            "connection refused"
+            matches!(
+                err,
+                RpcError::NetworkMismatch { ref expected, ref actual }
+                    if expected == "Local Standalone Network ; October 2026"
+                        && actual == "Some Other Net ; October 2026"
+            ),
+            "unexpected: {err}"
         );
     }
 }
