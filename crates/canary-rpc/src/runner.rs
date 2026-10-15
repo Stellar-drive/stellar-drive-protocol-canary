@@ -251,6 +251,9 @@ impl FieldAssertion {
 pub struct RpcFixture {
     pub metadata: FixtureMetadata,
     pub method: RpcMethod,
+    /// Validated `[request]` parameters, as the named-params object to
+    /// send. `None` when the fixture has no `[request]` table.
+    pub request: Option<serde_json::Map<String, serde_json::Value>>,
     pub assertions: Vec<FieldAssertion>,
 }
 
@@ -271,6 +274,9 @@ impl RpcFixture {
     /// kind = "field-exists"
     /// field = "passphrase"
     /// ```
+    ///
+    /// A `[request]` table, for methods that take parameters, is validated
+    /// against the CA-01 parameter table (see [`crate::request`]).
     pub fn from_loaded(loaded: &LoadedFixture) -> Result<RpcFixture, RpcFixtureError> {
         let invalid = |reason: String| RpcFixtureError::InvalidFixtureBody {
             source_path: loaded.source_path.clone(),
@@ -282,16 +288,24 @@ impl RpcFixture {
             .as_table()
             .ok_or_else(|| invalid("fixture body must be a table".to_string()))?;
 
-        if let Some(message) = canary_fixtures::unknown_body_keys(table, &["method", "assert"]) {
+        if let Some(message) =
+            canary_fixtures::unknown_body_keys(table, &["method", "request", "assert"])
+        {
             return Err(invalid(message));
         }
 
-        let method: RpcMethod = table
+        let method_name = table
             .get("method")
             .and_then(toml::Value::as_str)
-            .ok_or_else(|| invalid("missing required string field \"method\"".to_string()))?
-            .parse()
-            .map_err(invalid)?;
+            .ok_or_else(|| invalid("missing required string field \"method\"".to_string()))?;
+        // A bad `[request]` is reported even for a method the engine does
+        // not run yet, so the author sees it before the method is wired up.
+        let request = if crate::request::is_known_method(method_name) {
+            crate::request::validate_request(method_name, table.get("request")).map_err(&invalid)?
+        } else {
+            None
+        };
+        let method: RpcMethod = method_name.parse().map_err(invalid)?;
 
         let assert_entries = table
             .get("assert")
@@ -313,6 +327,7 @@ impl RpcFixture {
         Ok(RpcFixture {
             metadata: loaded.metadata.clone(),
             method,
+            request,
             assertions,
         })
     }
