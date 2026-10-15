@@ -253,6 +253,7 @@ dependencies = [
 name = "canary-xdr"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "canary-core",
  "canary-fixtures",
  "serde",
