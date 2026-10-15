@@ -17,6 +17,12 @@ All notable changes to this project are documented in this file.
 - A strict parser and deterministic serializer for `.stellar-canary.lock`
   (CF-03) in `canary-config`: `load_lock`, `parse_lock` and `serialize_lock`.
   No command reads or writes a lockfile yet.
+- RPC attempt logging in `--verbose` mode: each attempt writes one line
+  to stderr, e.g. `[RPC attempt 1/3: 124ms] getNetwork <url>`, with the
+  endpoint URL scrubbed before printing — basic-auth userinfo becomes
+  `***:***@` and query values become `***` (CF-08 section 3.5). Without
+  `--verbose` nothing new is logged, so existing stderr output is
+  unchanged.
 
 ### Changed
 

@@ -191,7 +191,11 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
         //   target-protocol run against a not-yet-upgraded network is a
         //   core upgrade-rehearsal use case, but it must be visible
         //   rather than only an annotation in the report.
-        let client = HttpRpcClient::new(rpc_url.clone());
+        // In --verbose mode every attempt of this probe (and, through
+        // `RunOptions`, of every fixture call) is logged to stderr with
+        // its attempt number and duration; the endpoint URL is scrubbed
+        // inside the client, so credentials never reach the log.
+        let client = HttpRpcClient::new(rpc_url.clone()).with_verbose(args.verbose);
         let (observed_protocol, network_error) = match client.get_network().await {
             Ok(info) => {
                 if let Err(err) = validate_network_info(&info, &passphrase, target_protocol.0) {
