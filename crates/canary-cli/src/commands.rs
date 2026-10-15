@@ -143,12 +143,24 @@ pub async fn run_check(args: CheckArgs) -> ExitCode {
 async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
     let project_root = ProjectRoot::resolve(args.project_root.as_deref())?;
     let root = project_root.path.clone();
-    let fixtures_dir = project_root.resolve_input(&args.fixtures_dir);
 
     let config = match &args.config {
         Some(path) => canary_config::load(&project_root.resolve_input(path))?,
         None => canary_config::load_from_root(&root)?.unwrap_or_default(),
     };
+
+    // Cascade per key: an explicitly passed CLI flag beats the matching
+    // `.stellar-canary.toml` setting, which beats the built-in default
+    // (issue #474).
+    let settings = canary_config::resolve_settings(
+        &config,
+        canary_config::CliOverrides {
+            network: args.network.clone(),
+            rpc_url: args.rpc_url.clone(),
+            fixtures_dir: args.fixtures_dir.clone(),
+        },
+    );
+    let fixtures_dir = project_root.resolve_input(&settings.fixtures_dir);
 
     let target_protocol =
         ProtocolVersion(validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol));
@@ -163,15 +175,15 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
         canary_project::resolve_project_type(project.project_type, explicit_type);
 
     let live_checks_needed = config.tests.rpc || config.tests.soroban;
-    let network_name = parse_network_name(&args.network);
+    let network_name = parse_network_name(&settings.network);
     let (network_context, network_summary) = if live_checks_needed {
-        let rpc_url = args
+        let rpc_url = settings
             .rpc_url
             .clone()
             .or_else(|| default_rpc_url(&network_name).map(str::to_string))
             .ok_or_else(|| {
                 CanaryError::Configuration(format!(
-                    "--rpc-url is required for network {network_name} (no built-in default)"
+                    "no RPC URL for network {network_name}: pass --rpc-url or set rpc_url in .stellar-canary.toml (no built-in default)"
                 ))
             })?;
         let passphrase = default_passphrase(&network_name).unwrap_or("").to_string();
@@ -427,12 +439,22 @@ pub fn run_inspect(args: InspectArgs) -> ExitCode {
 fn run_inspect_inner(args: InspectArgs) -> Result<ExitCode, CanaryError> {
     let project_root = ProjectRoot::resolve(args.project_root.as_deref())?;
     let root = project_root.path.clone();
-    let fixtures_dir = project_root.resolve_input(&args.fixtures_dir);
 
     let config = match &args.config {
         Some(path) => canary_config::load(&project_root.resolve_input(path))?,
         None => canary_config::load_from_root(&root)?.unwrap_or_default(),
     };
+
+    // `--fixtures-dir` overrides the configured `fixtures_dir`, which
+    // overrides the built-in default (issue #474).
+    let settings = canary_config::resolve_settings(
+        &config,
+        canary_config::CliOverrides {
+            fixtures_dir: args.fixtures_dir.clone(),
+            ..canary_config::CliOverrides::default()
+        },
+    );
+    let fixtures_dir = project_root.resolve_input(&settings.fixtures_dir);
 
     let detected = canary_project::detect(&root);
     let explicit_type = match config.project.project_type {
@@ -600,18 +622,26 @@ pub fn run_fixtures(args: FixturesArgs) -> ExitCode {
 fn run_fixtures_inner(args: FixturesArgs) -> Result<ExitCode, CanaryError> {
     let project_root = ProjectRoot::resolve(args.project_root.as_deref())?;
     let root = project_root.path.clone();
-    let fixtures_dir = project_root.resolve_input(&args.fixtures_dir);
 
-    let protocol = match validated_protocol_flag(args.protocol)? {
-        Some(p) => p,
-        None => {
-            let config = match &args.config {
-                Some(path) => canary_config::load(&project_root.resolve_input(path))?,
-                None => canary_config::load_from_root(&root)?.unwrap_or_default(),
-            };
-            config.protocol
-        }
+    let config = match &args.config {
+        Some(path) => canary_config::load(&project_root.resolve_input(path))?,
+        None => canary_config::load_from_root(&root)?.unwrap_or_default(),
     };
+
+    // `--fixtures-dir` overrides the configured `fixtures_dir`, which
+    // overrides the built-in default (issue #474). The configuration file
+    // is read even when `--protocol` is passed so the cascade always has
+    // the file to fall back to.
+    let settings = canary_config::resolve_settings(
+        &config,
+        canary_config::CliOverrides {
+            fixtures_dir: args.fixtures_dir.clone(),
+            ..canary_config::CliOverrides::default()
+        },
+    );
+    let fixtures_dir = project_root.resolve_input(&settings.fixtures_dir);
+
+    let protocol = validated_protocol_flag(args.protocol)?.unwrap_or(config.protocol);
 
     let loaded_fixtures = if fixtures_dir.is_dir() {
         canary_fixtures::load_directory(&fixtures_dir)?
@@ -732,7 +762,7 @@ mod tests {
     ) -> FixturesArgs {
         FixturesArgs {
             protocol,
-            fixtures_dir: PathBuf::from(fixtures_dir),
+            fixtures_dir: Some(PathBuf::from(fixtures_dir)),
             project_root: None,
             config: config.map(PathBuf::from),
         }
@@ -745,7 +775,7 @@ mod tests {
     ) -> InspectArgs {
         InspectArgs {
             protocol,
-            fixtures_dir: PathBuf::from(fixtures_dir),
+            fixtures_dir: Some(PathBuf::from(fixtures_dir)),
             project_root: None,
             config: config.map(PathBuf::from),
         }

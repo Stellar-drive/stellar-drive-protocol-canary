@@ -59,9 +59,10 @@ pub struct CheckArgs {
     #[arg(long)]
     pub protocol: Option<u32>,
 
-    /// Network to run live checks against.
-    #[arg(long, default_value = "testnet")]
-    pub network: String,
+    /// Network to run live checks against (overrides `network` in
+    /// .stellar-canary.toml; default: testnet).
+    #[arg(long)]
+    pub network: Option<String>,
 
     /// RPC endpoint to use for live checks.
     #[arg(long = "rpc-url")]
@@ -83,9 +84,10 @@ pub struct CheckArgs {
     #[arg(long = "rpc-timeout", default_value = "10")]
     pub rpc_timeout: u64,
 
-    /// Directory containing fixture files.
-    #[arg(long = "fixtures-dir", default_value = "fixtures")]
-    pub fixtures_dir: PathBuf,
+    /// Directory containing fixture files (overrides `fixtures_dir` in
+    /// .stellar-canary.toml; default: fixtures).
+    #[arg(long = "fixtures-dir", value_name = "PATH")]
+    pub fixtures_dir: Option<PathBuf>,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Terminal)]
@@ -140,9 +142,10 @@ pub struct InspectArgs {
     #[arg(long)]
     pub protocol: Option<u32>,
 
-    /// Directory containing fixture files to inspect.
-    #[arg(long = "fixtures-dir", default_value = "fixtures")]
-    pub fixtures_dir: PathBuf,
+    /// Directory containing fixture files to inspect (overrides
+    /// `fixtures_dir` in .stellar-canary.toml; default: fixtures).
+    #[arg(long = "fixtures-dir", value_name = "PATH")]
+    pub fixtures_dir: Option<PathBuf>,
 
     /// Directory to treat as the project root (default: the current
     /// directory). Relative `--config`, `--fixtures-dir` and `--output`
@@ -164,9 +167,10 @@ pub struct FixturesArgs {
     #[arg(long)]
     pub protocol: Option<u32>,
 
-    /// Directory containing fixture files.
-    #[arg(long = "fixtures-dir", default_value = "fixtures")]
-    pub fixtures_dir: PathBuf,
+    /// Directory containing fixture files (overrides `fixtures_dir` in
+    /// .stellar-canary.toml; default: fixtures).
+    #[arg(long = "fixtures-dir", value_name = "PATH")]
+    pub fixtures_dir: Option<PathBuf>,
 
     /// Directory to treat as the project root (default: the current
     /// directory). Relative `--config`, `--fixtures-dir` and `--output`
