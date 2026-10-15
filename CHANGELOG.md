@@ -4,6 +4,29 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `--project-root <PATH>` on `check`, `inspect` and `fixtures` (CF-07, D-08).
+  Relative `--config`, `--fixtures-dir` and `--output` paths resolve against
+  it. A path that does not exist or is not a directory exits `2`. Without the
+  flag nothing changes, and parent directories are still never searched.
+- JSON reports gain an optional `run.toolBuildCommit`: the Git commit the
+  binary was built from, or `null` when it was built without Git history
+  (CF-01). `schemaVersion` stays `1`. No timestamp is recorded, so two builds
+  of one commit stay byte-for-byte comparable.
+- A strict parser and deterministic serializer for `.stellar-canary.lock`
+  (CF-03) in `canary-config`: `load_lock`, `parse_lock` and `serialize_lock`.
+  No command reads or writes a lockfile yet.
+
+### Changed
+
+- RPC fixture assertions are evaluated against the raw JSON `result` the
+  endpoint returned, not a typed projection of it (CA-01 section 4.1). A
+  field the engine does not model can now be asserted on, and `field-absent`
+  on such a field is evaluated truthfully instead of passing for the wrong
+  reason. A `result` that is not an object is an `error`, not a failed
+  assertion. The shipped Protocol 28 fixtures give the same outcome.
+
 ## [0.2.0] - 2026-10-09
 
 `0.1.1` stays published and unchanged.
