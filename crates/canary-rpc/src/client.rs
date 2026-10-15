@@ -187,7 +187,13 @@ impl From<RpcError> for CanaryError {
 ///
 /// - The passphrase comparison is skipped when `expected_passphrase` is
 ///   empty: custom networks have no well-known passphrase to compare
-///   against (see `canary-cli`'s `default_passphrase`).
+///   against (see `canary-cli`'s `default_passphrase`), and nothing was
+///   supplied for them. Callers that accept an explicit passphrase —
+///   `stellar-canary check --network-passphrase <PASSPHRASE>` rejects an
+///   empty value at argument-parse time precisely so that flag cannot
+///   reach here as `""` and silently disable this check — pass it
+///   through as-is: a non-empty custom passphrase is compared exactly
+///   like a well-known one.
 /// - The passphrase is checked first — confirming *which* network the
 ///   endpoint is on before comparing protocol versions.
 pub fn validate_network_info(
@@ -1060,5 +1066,34 @@ mod tests {
 
         let err = validate_network_info(&info, "", 27).expect_err("protocol differs");
         assert!(matches!(err, RpcError::ProtocolMismatch { .. }));
+    }
+
+    /// A custom passphrase supplied by the caller (the CLI's
+    /// `--network-passphrase`) is compared exactly like a well-known one:
+    /// this is the path that makes private/standalone networks verifiable.
+    #[test]
+    fn validate_network_info_accepts_a_custom_passphrase_when_it_matches() {
+        let custom = "Local Standalone Network ; October 2026";
+        let info = network_info(custom, 28);
+        assert!(validate_network_info(&info, custom, 28).is_ok());
+    }
+
+    /// Negative side of the same path: a supplied custom passphrase that
+    /// differs from what the endpoint reports must construct a
+    /// `NetworkMismatch` naming both values, never a silent pass.
+    #[test]
+    fn validate_network_info_rejects_a_custom_passphrase_that_differs() {
+        let info = network_info("Some Other Net ; October 2026", 28);
+        let err = validate_network_info(&info, "Local Standalone Network ; October 2026", 28)
+            .expect_err("custom passphrase differs");
+        assert!(
+            matches!(
+                err,
+                RpcError::NetworkMismatch { ref expected, ref actual }
+                    if expected == "Local Standalone Network ; October 2026"
+                        && actual == "Some Other Net ; October 2026"
+            ),
+            "unexpected: {err}"
+        );
     }
 }

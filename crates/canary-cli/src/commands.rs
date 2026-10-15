@@ -14,7 +14,7 @@ use canary_rpc::{validate_network_info, HttpRpcClient, RpcClient, RpcError};
 use canary_runner::EnabledSurfaces;
 
 use crate::cli::{CheckArgs, FixturesArgs, InspectArgs, OutputFormat, ReportArgs};
-use crate::network::{default_passphrase, default_rpc_url, parse_network_name};
+use crate::network::{default_rpc_url, parse_network_name, resolve_passphrase};
 
 const CACHE_DIR_NAME: &str = ".stellar-canary-cache";
 
@@ -186,7 +186,7 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
                     "no RPC URL for network {network_name}: pass --rpc-url or set rpc_url in .stellar-canary.toml (no built-in default)"
                 ))
             })?;
-        let passphrase = default_passphrase(&network_name).unwrap_or("").to_string();
+        let passphrase = resolve_passphrase(&network_name, args.network_passphrase.as_deref());
 
         // Fetch the endpoint's network identity and compare it against
         // what this run assumed (see `canary_rpc::validate_network_info`,
@@ -196,8 +196,9 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
         //   (rendered as "protocol not observed"); it does not block the
         //   run — individual RPC/Soroban fixtures still report the outage
         //   as execution errors.
-        // - A passphrase mismatch means `--network` and `--rpc-url` refer
-        //   to different networks: abort as a configuration error rather
+        // - A passphrase mismatch means `--network` (or an explicit
+        //   `--network-passphrase`) and `--rpc-url` refer to different
+        //   networks: abort as a configuration error rather
         //   than attribute results to the wrong network.
         // - A protocol mismatch is a warning, not a failure: running a
         //   target-protocol run against a not-yet-upgraded network is a
