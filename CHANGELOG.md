@@ -44,6 +44,13 @@ All notable changes to this project are documented in this file.
 - A strict parser and deterministic serializer for `.stellar-canary.lock`
   (CF-03) in `canary-config`: `load_lock`, `parse_lock` and `serialize_lock`.
   No command reads or writes a lockfile yet.
+- `--rpc-max-retries <N>` (default `3`) and `--rpc-retry-delay-ms <MS>`
+  (default `500`) on `check`: how many times a failed RPC attempt may be
+  retried and the linear-backoff base delay between attempts. `0` retries
+  means one attempt and failure on the first network error. The policy is
+  applied to every RPC call the run makes — the network probe and the
+  fixture executions alike — through `RetryPolicy::from_retries` in
+  `canary-rpc`.
 - `canary_fixtures::pack_digest`: the `canary-pack-v1` digest of a fixture
   pack (CF-02), with the file list it was computed from. It is distinct from
   the engine's internal per-fixture cache key. No command uses it yet.
