@@ -213,7 +213,8 @@ pub struct FixturesArgs {
 
 #[derive(Debug, Parser)]
 pub struct ReportArgs {
-    /// Path to a JSON report produced by `stellar-canary check --json`.
+    /// Path to a JSON report produced by `stellar-canary check --json`, or
+    /// `-` to read the report from standard input until EOF (10 MiB max).
     pub path: PathBuf,
 
     /// Output format to render the stored report as.
