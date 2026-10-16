@@ -8,7 +8,8 @@ use canary_core::{
 };
 use canary_git::{collect_git_context, CliGitRepository};
 use canary_report::{
-    JsonReporter, MarkdownReporter, NetworkSummary, ProjectSummary, ReportInput, TerminalReporter,
+    JUnitReporter, JsonReporter, MarkdownReporter, NetworkSummary, ProjectSummary, ReportInput,
+    TerminalReporter,
 };
 use canary_rpc::{validate_network_info, HttpRpcClient, RpcClient, RpcError};
 use canary_runner::EnabledSurfaces;
@@ -381,6 +382,7 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
             OutputFormat::Terminal => TerminalReporter::render(&report_input),
             OutputFormat::Json => JsonReporter::render(&report_input),
             OutputFormat::Markdown => MarkdownReporter::render(&report_input),
+            OutputFormat::JUnit => JUnitReporter::render(&report_input),
         }
     };
 
@@ -1034,6 +1036,7 @@ fn run_report_inner(args: ReportArgs) -> Result<ExitCode, CanaryError> {
         OutputFormat::Terminal => TerminalReporter::render(&report_input),
         OutputFormat::Json => JsonReporter::render(&report_input),
         OutputFormat::Markdown => MarkdownReporter::render(&report_input),
+        OutputFormat::JUnit => JUnitReporter::render(&report_input),
     };
     println!("{rendered}");
 

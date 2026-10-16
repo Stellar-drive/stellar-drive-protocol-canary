@@ -66,6 +66,9 @@ pub enum OutputFormat {
     Json,
     /// Markdown output for summaries and pull-request comments.
     Markdown,
+    /// JUnit XML output for CI test-summary dashboards.
+    #[value(name = "junit")]
+    JUnit,
 }
 
 #[derive(Debug, Parser)]
