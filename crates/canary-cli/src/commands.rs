@@ -402,16 +402,18 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
 /// `println!` puts on stdout — trailing newline included — so `--output`
 /// and shell redirection produce identical files.
 ///
+/// The write is atomic ([`canary_report::atomic_write_report`]): the bytes
+/// go to a `.tmp` sibling that is renamed over `path`, so a crash or a
+/// full disk can never leave a truncated report behind, and an existing
+/// file's permissions are preserved.
+///
 /// An unwritable path is a configuration error (the same exit code as any
 /// other unusable caller-supplied path, e.g. a missing `--config` file),
-/// not a compatibility result.
+/// not a compatibility result. The underlying error already names the
+/// path, so it is passed through unchanged.
 fn write_report_file(path: &Path, rendered: &str) -> Result<(), CanaryError> {
-    std::fs::write(path, format!("{rendered}\n")).map_err(|err| {
-        CanaryError::Configuration(format!(
-            "failed to write report to {}: {err}",
-            path.display()
-        ))
-    })
+    canary_report::atomic_write_report(path, &format!("{rendered}\n"))
+        .map_err(|err| CanaryError::Configuration(err.to_string()))
 }
 
 /// Prints offline project diagnostics and the planned fixture run.

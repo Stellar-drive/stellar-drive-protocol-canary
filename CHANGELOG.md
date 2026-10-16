@@ -76,6 +76,12 @@ All notable changes to this project are documented in this file.
   on such a field is evaluated truthfully instead of passing for the wrong
   reason. A `result` that is not an object is an `error`, not a failed
   assertion. The shipped Protocol 28 fixtures give the same outcome.
+- `--output` now writes the report file atomically: the bytes go to a
+  `.tmp` sibling in the target directory, which is then renamed over the
+  destination, so a killed run can no longer leave a truncated or
+  unparseable report on disk. An existing report's permissions are
+  preserved, a failed write leaves no `.tmp` file behind, and the written
+  bytes are unchanged (still exactly what stdout prints).
 
 ## [0.2.0] - 2026-10-09
 
