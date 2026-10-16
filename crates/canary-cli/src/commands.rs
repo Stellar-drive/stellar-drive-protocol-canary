@@ -13,7 +13,8 @@ use canary_report::{
 use canary_rpc::{validate_network_info, HttpRpcClient, RpcClient, RpcError};
 use canary_runner::EnabledSurfaces;
 
-use crate::cli::{CheckArgs, FixturesArgs, InspectArgs, OutputFormat, ReportArgs};
+use crate::cli::{CheckArgs, FixturesArgs, FixturesFormat, InspectArgs, OutputFormat, ReportArgs};
+use crate::fixtures_json;
 use crate::network::{default_rpc_url, parse_network_name, resolve_passphrase};
 
 const CACHE_DIR_NAME: &str = ".stellar-canary-cache";
@@ -311,6 +312,25 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
     let decision = DefaultPolicyEvaluator.evaluate(&results, &policy);
     let exit_code = canary_core::exit_code_for_run(&results, decision);
 
+    // The fixtures' own CF-04 evidence, so the terminal report can show
+    // which results are backed by a verification record. A fixture with
+    // no record is simply absent here, which reporters render as
+    // `[unverified]`.
+    let verification: Vec<canary_report::VerificationSummary> = loaded_fixtures
+        .iter()
+        .filter_map(|fixture| {
+            fixture
+                .verification
+                .as_ref()
+                .map(|record| canary_report::VerificationSummary {
+                    fixture_id: fixture.metadata.id.clone(),
+                    method: record.method.as_str().to_string(),
+                    outcome: record.outcome.as_str().to_string(),
+                    checked_at: record.checked_at.clone(),
+                })
+        })
+        .collect();
+
     let report_input = ReportInput {
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         target_protocol,
@@ -329,6 +349,7 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
                 reason: s.reason.clone(),
             })
             .collect(),
+        verification,
         decision,
         git,
         verbose: args.verbose,
@@ -655,30 +676,48 @@ fn run_fixtures_inner(args: FixturesArgs) -> Result<ExitCode, CanaryError> {
     };
     let store = canary_fixtures::validate(&loaded_fixtures)?;
 
-    println!("Protocol {protocol} fixtures");
-    println!();
+    let format = if args.json {
+        FixturesFormat::Json
+    } else {
+        args.format
+    };
+    match format {
+        FixturesFormat::Terminal => {
+            println!("Protocol {protocol} fixtures");
+            println!();
 
-    let target = canary_core::ProtocolVersion(protocol);
-    let mut any = false;
-    for surface in canary_report::SURFACE_ORDER {
-        let ids: Vec<&str> = store
-            .for_protocol(target)
-            .filter(|f| f.surface == surface)
-            .map(|f| f.id.as_str())
-            .collect();
-        if ids.is_empty() {
-            continue;
-        }
-        any = true;
-        println!("{}", canary_report::surface_heading(surface));
-        for id in ids {
-            println!("  {id}");
-        }
-        println!();
-    }
+            let target = canary_core::ProtocolVersion(protocol);
+            let mut any = false;
+            for surface in canary_report::SURFACE_ORDER {
+                let ids: Vec<&str> = store
+                    .for_protocol(target)
+                    .filter(|f| f.surface == surface)
+                    .map(|f| f.id.as_str())
+                    .collect();
+                if ids.is_empty() {
+                    continue;
+                }
+                any = true;
+                println!("{}", canary_report::surface_heading(surface));
+                for id in ids {
+                    println!("  {id}");
+                }
+                println!();
+            }
 
-    if !any {
-        println!("(no fixtures found in {})", fixtures_dir.display());
+            if !any {
+                println!("(no fixtures found in {})", fixtures_dir.display());
+            }
+        }
+        FixturesFormat::Json => {
+            let inventory = fixtures_json::build(
+                protocol,
+                fixtures_dir.is_dir(),
+                &fixtures_dir,
+                &loaded_fixtures,
+            );
+            println!("{}", fixtures_json::render(&inventory));
+        }
     }
 
     Ok(ExitCode::Pass)
@@ -786,6 +825,8 @@ mod tests {
             fixtures_dir: Some(PathBuf::from(fixtures_dir)),
             project_root: None,
             config: config.map(PathBuf::from),
+            format: crate::cli::FixturesFormat::Terminal,
+            json: false,
         }
     }
 
@@ -1054,6 +1095,9 @@ mod tests {
             network: None,
             results,
             skipped: Vec::new(),
+            // Verification evidence lives with the fixture pack, not
+            // with a stored run.
+            verification: Vec::new(),
             decision,
             git: GitContext::default(),
             verbose: false,
