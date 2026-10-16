@@ -10,7 +10,7 @@
 //! official `stellar-xdr` crate (via `canary-xdr`), so no XDR parsing is
 //! reimplemented here.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -275,6 +275,11 @@ pub struct HttpRpcClient {
     http: reqwest::Client,
     endpoint: String,
     retry_policy: RetryPolicy,
+    /// When `true`, every RPC attempt is logged to stderr with its attempt
+    /// number, total attempt budget, and elapsed time — with the endpoint
+    /// URL scrubbed (see [`scrub_url`]). Off by default, so existing
+    /// callers' stderr output is unchanged.
+    verbose: bool,
 }
 
 impl HttpRpcClient {
@@ -307,6 +312,7 @@ impl HttpRpcClient {
                 .unwrap_or_else(|_| reqwest::Client::new()),
             endpoint: endpoint.into(),
             retry_policy: RetryPolicy::default(),
+            verbose: false,
         }
     }
 
@@ -426,6 +432,40 @@ impl HttpRpcClient {
         self
     }
 
+    /// Returns this client with attempt-level logging switched on or off.
+    ///
+    /// Builder-style: this consumes the client and hands back a new one,
+    /// so it chains onto [`HttpRpcClient::new`], [`HttpRpcClient::with_timeout`]
+    /// and [`HttpRpcClient::with_retry_policy`].
+    ///
+    /// When verbose, every attempt writes one line to **stderr** after it
+    /// completes — success or failure — of the shape
+    ///
+    /// ```text
+    /// [RPC attempt 1/3: 124ms] getNetwork https://***:***@rpc.example.com
+    /// ```
+    ///
+    /// where `1/3` is the attempt number against the configured attempt
+    /// budget, `124ms` is that attempt's own duration (the backoff sleep
+    /// between attempts is not counted), and the URL is passed through
+    /// [`scrub_url`] so basic-auth credentials and query tokens never reach
+    /// a log or CI transcript (CF-08 section 3.5).
+    ///
+    /// The default is off: a client built without this method emits no
+    /// attempt lines at all, so non-verbose runs keep exactly the stderr
+    /// output they had before. This method cannot fail and does not panic.
+    ///
+    /// ```
+    /// use canary_rpc::HttpRpcClient;
+    ///
+    /// let _client = HttpRpcClient::new("https://soroban-testnet.stellar.org")
+    ///     .with_verbose(true);
+    /// ```
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
     async fn call<P: Serialize, R: DeserializeOwned>(
         &self,
         method: &str,
@@ -441,7 +481,21 @@ impl HttpRpcClient {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.try_call::<R>(method, &body).await {
+            let started = Instant::now();
+            let outcome = self.try_call::<R>(method, &body).await;
+            if self.verbose {
+                eprintln!(
+                    "{}",
+                    attempt_log_line(
+                        attempt,
+                        self.retry_policy.max_attempts.max(1),
+                        started.elapsed(),
+                        method,
+                        &scrub_url(&self.endpoint),
+                    )
+                );
+            }
+            match outcome {
                 Ok(value) => return Ok(value),
                 Err(err) if is_retryable(&err) && attempt < self.retry_policy.max_attempts => {
                     tokio::time::sleep(self.retry_policy.base_delay * attempt).await;
@@ -587,9 +641,114 @@ fn classify_reqwest_error(method: &str, error: &reqwest::Error) -> RpcError {
     } else {
         RpcError::Transport {
             method: method.to_string(),
-            message: error.to_string(),
+            message: scrub_url_out_of_message(&error.to_string(), error.url().map(|u| u.as_str())),
         }
     }
+}
+
+/// Replaces `raw_url` with its [`scrub_url`] form inside `message`, so a
+/// transport error that echoes the request URL cannot carry userinfo or
+/// query tokens into a report or a CI log.
+///
+/// The match is a plain substring replacement on the URL reqwest reports:
+/// when it is absent from the message (or there is no URL at all) the
+/// message is returned unchanged. This is best effort by construction —
+/// CF-08 section 3.5 already treats pattern redaction as best effort — and
+/// only ever removes secret material, never diagnostic text.
+fn scrub_url_out_of_message(message: &str, raw_url: Option<&str>) -> String {
+    match raw_url {
+        Some(raw) if !raw.is_empty() && message.contains(raw) => {
+            message.replace(raw, &scrub_url(raw))
+        }
+        _ => message.to_string(),
+    }
+}
+
+/// Masks credentials in a URL before it is logged (CF-08 section 3.5).
+///
+/// - Basic-auth userinfo is replaced wholesale: `https://user:pass@host`
+///   becomes `https://***:***@host` (and `https://user@host` the same, so
+///   a username alone is not leaked either).
+/// - Every query parameter value is masked: `?token=abc&limit=50` becomes
+///   `?token=***&limit=***`, and a valueless `?flag` becomes `?***`.
+/// - Scheme, host, port, path and fragment are kept verbatim, so the log
+///   still shows *which* endpoint was called.
+///
+/// This is deliberately not a URL parser: it works on the structural
+/// delimiters only (`://`, `/`, `?`, `#`, `@`), so a string that is not an
+/// absolute URL is returned unchanged, and no URL crate is pulled in for a
+/// logging helper.
+fn scrub_url(url: &str) -> String {
+    let (without_fragment, fragment) = match url.split_once('#') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (url, None),
+    };
+    let (base, query) = match without_fragment.split_once('?') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (without_fragment, None),
+    };
+
+    let mut scrubbed = scrub_userinfo(base);
+    if let Some(query) = query {
+        scrubbed.push('?');
+        scrubbed.push_str(&scrub_query(query));
+    }
+    if let Some(fragment) = fragment {
+        scrubbed.push('#');
+        scrubbed.push_str(fragment);
+    }
+    scrubbed
+}
+
+/// Replaces the userinfo (`user:pass@`) part of a URL's authority with
+/// `***:***@`. A URL without `://` or without userinfo is unchanged.
+fn scrub_userinfo(base: &str) -> String {
+    let Some((scheme, rest)) = base.split_once("://") else {
+        return base.to_string();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let Some(at) = authority.rfind('@') else {
+        return base.to_string();
+    };
+    format!("{scheme}://***:***@{}{tail}", &authority[at + 1..])
+}
+
+/// Masks every value in a query string: `token=abc` → `token=***`, and a
+/// valueless `flag` → `***`.
+fn scrub_query(query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((name, _)) => format!("{name}=***"),
+            None => "***".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Renders one verbose attempt log line, e.g.
+/// `[RPC attempt 1/3: 124ms] getNetwork https://***:***@rpc.example.com`.
+///
+/// `max_attempts` is the configured attempt budget (the caller passes
+/// `RetryPolicy::max_attempts`, floored at 1 so the line can never read
+/// `…/0`), and `scrubbed_url` must already have been through
+/// [`scrub_url`] — this function does not re-scrub, so callers keep the
+/// redaction in one place.
+fn attempt_log_line(
+    attempt: u32,
+    max_attempts: u32,
+    elapsed: Duration,
+    method: &str,
+    scrubbed_url: &str,
+) -> String {
+    format!(
+        "[RPC attempt {attempt}/{max_attempts}: {}ms] {method} {scrubbed_url}",
+        elapsed.as_millis()
+    )
 }
 
 fn is_retryable(error: &RpcError) -> bool {

@@ -55,7 +55,7 @@ fails with exit code `2` (see [No applicable fixtures](#no-applicable-fixtures))
 - `--format markdown` — a Markdown table, suitable for a PR comment or job
   summary.
 
-> **Note on verbosity:** The `--quiet` flag only affects the `terminal` output format, condensing the output to a single `Status:` line instead of a full report. The `--verbose` flag affects the detail included: it adds skip reasons to both `markdown` and `terminal` outputs, and is passed through into the `json` report's `verbose` field.
+> **Note on verbosity:** The `--quiet` flag only affects the `terminal` output format, condensing the output to a single `Status:` line instead of a full report. The `--verbose` flag affects the detail included: it adds skip reasons to both `markdown` and `terminal` outputs, and is passed through into the `json` report's `verbose` field. `--verbose` also logs every RPC attempt to stderr as one line — e.g. `[RPC attempt 1/3: 124ms] getNetwork <url>` — with basic-auth userinfo masked as `***:***@` and query values masked as `***` before printing (CF-08), so endpoint credentials never reach a CI log. Without `--verbose` no attempt lines are emitted at all.
 
 The report is printed to stdout **regardless of exit code**, including on
 a compatibility failure — a caller does not need to inspect stderr to get
