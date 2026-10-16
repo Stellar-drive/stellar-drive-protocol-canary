@@ -685,7 +685,12 @@ fn run_fixtures_inner(args: FixturesArgs) -> Result<ExitCode, CanaryError> {
 /// Reads the report file named by [`ReportArgs::path`] — the JSON written by
 /// `stellar-canary check --json`, as described in
 /// `docs/json-report-contract.md` — re-renders it in [`ReportArgs::format`],
-/// and prints the result to stdout. Unlike [`run_check`], it never touches the
+/// and prints the result to stdout. When the path is `"-"`, the report is
+/// read from standard input until EOF instead, which chains it onto another
+/// command without touching disk:
+/// `stellar-canary check --format json | stellar-canary report -`.
+/// Standard input is capped at 10 MiB (D-06); a larger stream is rejected
+/// rather than truncated. Unlike [`run_check`], it never touches the
 /// network or re-runs any fixture, so it is safe to call offline, on CI, or
 /// against a report produced by another machine.
 ///
@@ -706,11 +711,14 @@ fn run_fixtures_inner(args: FixturesArgs) -> Result<ExitCode, CanaryError> {
 ///
 /// ```text
 /// # Render a stored report as Markdown (the default format).
-/// stellar-canary report --path results.json
+/// stellar-canary report results.json
 ///
 /// # Re-render the same report for a terminal or as JSON.
-/// stellar-canary report --path results.json --format terminal
-/// stellar-canary report --path results.json --format json
+/// stellar-canary report results.json --format terminal
+/// stellar-canary report results.json --format json
+///
+/// # Read the report from standard input instead of a file.
+/// stellar-canary check --format json | stellar-canary report -
 /// ```
 pub fn run_report(args: ReportArgs) -> ExitCode {
     match run_report_inner(args) {
@@ -723,12 +731,20 @@ pub fn run_report(args: ReportArgs) -> ExitCode {
 }
 
 fn run_report_inner(args: ReportArgs) -> Result<ExitCode, CanaryError> {
-    let json_text = std::fs::read_to_string(&args.path).map_err(|e| {
-        CanaryError::Configuration(format!(
-            "failed to read report file {}: {e}",
-            args.path.display()
-        ))
-    })?;
+    // `report -` reads the report from standard input until EOF (E-053),
+    // so a report can be piped straight through without a temporary file.
+    let json_text = if args.path == Path::new("-") {
+        canary_report::read_report_json(std::io::stdin()).map_err(|e| {
+            CanaryError::Configuration(format!("failed to read report from standard input: {e}"))
+        })?
+    } else {
+        std::fs::read_to_string(&args.path).map_err(|e| {
+            CanaryError::Configuration(format!(
+                "failed to read report file {}: {e}",
+                args.path.display()
+            ))
+        })?
+    };
     let report_input = canary_report::JsonReporter::parse(&json_text)
         .map_err(|e| CanaryError::Configuration(format!("invalid report file: {e}")))?;
 
