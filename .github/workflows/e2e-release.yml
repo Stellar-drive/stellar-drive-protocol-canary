@@ -79,8 +79,8 @@ jobs:
               report = json.load(f)
 
           print("Validating report JSON structure...")
-          schema = report.get("schema_version")
-          assert schema == 1, f"unexpected schema_version: {schema}"
+          schema = report.get("schemaVersion") or report.get("schema_version")
+          assert schema == 1, f"unexpected schemaVersion: {schema}"
           status = report.get("status")
           assert status == "pass", f"expected pass status, got: {status}"
 

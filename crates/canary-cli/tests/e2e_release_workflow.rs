@@ -134,7 +134,7 @@ pub fn validate_workflow_definition(content: &str) -> Result<WorkflowCheckSummar
 
     let asserts_exit_code_zero = content
         .contains("Assert exit code 0 and valid report JSON generation")
-        && content.contains("schema_version")
+        && (content.contains("schemaVersion") || content.contains("schema_version"))
         && content.contains("counts");
     if !asserts_exit_code_zero {
         return Err("workflow missing exit code 0 or report validity assertion".to_string());
@@ -173,9 +173,10 @@ pub fn validate_report_json(json_str: &str) -> Result<(), String> {
         serde_json::from_str(json_str).map_err(|e| format!("failed to parse report JSON: {e}"))?;
 
     let schema_version = report
-        .get("schema_version")
+        .get("schemaVersion")
+        .or_else(|| report.get("schema_version"))
         .and_then(Value::as_u64)
-        .ok_or_else(|| "missing or invalid 'schema_version'".to_string())?;
+        .ok_or_else(|| "missing or invalid 'schemaVersion'".to_string())?;
     if schema_version != 1 {
         return Err(format!("unexpected schema_version: {schema_version}"));
     }
