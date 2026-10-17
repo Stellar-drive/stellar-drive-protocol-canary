@@ -51,24 +51,26 @@ jobs:
             -o fixture-pack.tar.gz
           tar -xzf fixture-pack.tar.gz -C pack-archive --strip-components=1
 
-          # Set up clean project workspace with the tagged fixture pack
-          mkdir -p test-workdir
-          cp -r pack-archive/protocol-28/* test-workdir/
+          # Set up project workspace with configuration outside the fixtures directory.
+          # The fixture loader scans all *.toml in --fixtures-dir, so .stellar-canary.toml
+          # must reside outside the fixtures folder to avoid being parsed as a fixture file.
+          mkdir -p test-workdir/fixtures
+          cp -r pack-archive/protocol-28/* test-workdir/fixtures/
 
-          # Create offline configuration targeting protocol 28
+          # Create offline configuration targeting protocol 28 in test-workdir
           printf 'version = 1\nprotocol = 28\n\n[tests]\nxdr = true\nrpc = false\nsoroban = false\n' > test-workdir/.stellar-canary.toml
 
       - name: Execute stellar-canary check --fixtures-dir .
-        working-directory: test-workdir
+        working-directory: test-workdir/fixtures
         run: |
-          # Execute check against fixtures directory
-          stellar-canary check --fixtures-dir .
+          # Execute check against fixtures directory with external configuration
+          stellar-canary check --fixtures-dir . --config ../.stellar-canary.toml
 
           # Generate versioned report JSON for assertion
-          stellar-canary check --fixtures-dir . --json --no-cache > report.json
+          stellar-canary check --fixtures-dir . --config ../.stellar-canary.toml --json --no-cache > report.json
 
       - name: Assert exit code 0 and valid report JSON generation
-        working-directory: test-workdir
+        working-directory: test-workdir/fixtures
         run: |
           python3 -c '
           import json, sys
@@ -95,11 +97,11 @@ jobs:
           '
 
       - name: Negative test - assert simulated execution error triggers clear CI failure step
-        working-directory: test-workdir
+        working-directory: test-workdir/fixtures
         run: |
           echo "Simulating execution error: checking an unsupported protocol (999) without matching fixtures"
           set +e
-          stellar-canary check --fixtures-dir . --protocol 999 > sim_out.txt 2> sim_err.txt
+          stellar-canary check --fixtures-dir . --config ../.stellar-canary.toml --protocol 999 > sim_out.txt 2> sim_err.txt
           EXIT_CODE=$?
           set -e
 
