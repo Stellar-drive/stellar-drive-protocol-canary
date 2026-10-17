@@ -79,18 +79,24 @@ jobs:
               report = json.load(f)
 
           print("Validating report JSON structure...")
-          assert report.get("schema_version") == 1, f"unexpected schema_version: {report.get(\"schema_version\")}"
-          assert report.get("status") == "pass", f"expected pass status, got: {report.get(\"status\")}"
+          schema = report.get("schema_version")
+          assert schema == 1, f"unexpected schema_version: {schema}"
+          status = report.get("status")
+          assert status == "pass", f"expected pass status, got: {status}"
 
           counts = report.get("counts", {})
           print(f"Report counts: {counts}")
-          assert counts.get("failed") == 0, f"expected 0 failed checks, got {counts.get(\"failed\")}"
-          assert counts.get("errors") == 0, f"expected 0 errors, got {counts.get(\"errors\")}"
-          assert counts.get("total", 0) > 0, f"expected total checks > 0, got {counts.get(\"total\")}"
-          assert counts.get("passed", 0) > 0, f"expected passed checks > 0, got {counts.get(\"passed\")}"
+          failed = counts.get("failed")
+          assert failed == 0, f"expected 0 failed checks: {failed}"
+          errors = counts.get("errors")
+          assert errors == 0, f"expected 0 errors: {errors}"
+          total = counts.get("total", 0)
+          assert total > 0, f"expected total checks > 0: {total}"
+          passed = counts.get("passed", 0)
+          assert passed > 0, f"expected passed checks > 0: {passed}"
 
           results = report.get("results", [])
-          assert len(results) == counts.get("total"), "results array length must match counts.total"
+          assert len(results) == total, "results array length must match counts.total"
           assert all(r.get("status") == "pass" for r in results), "all check results must have pass status"
           assert all(r.get("surface") == "xdr" for r in results), "all executed checks must be offline XDR"
           print("Report verification passed successfully!")
