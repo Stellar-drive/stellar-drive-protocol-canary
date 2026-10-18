@@ -51,6 +51,13 @@ All notable changes to this project are documented in this file.
   applied to every RPC call the run makes — the network probe and the
   fixture executions alike — through `RetryPolicy::from_retries` in
   `canary-rpc`.
+- `--cache-dir <PATH>` on `check`: where the local result cache lives, for
+  example a CI runner's persistent cache or a tmpfs mount. The directory is
+  created if it does not exist, and a path that cannot be created exits `2`
+  before any fixture runs with an error naming the flag and the path. A
+  relative path resolves against `--project-root` when that flag is given.
+  Without the flag the cache stays in `.stellar-canary-cache` in the project
+  root.
 - `canary_fixtures::pack_digest`: the `canary-pack-v1` digest of a fixture
   pack (CF-02), with the file list it was computed from. It is distinct from
   the engine's internal per-fixture cache key. No command uses it yet.
@@ -193,6 +200,11 @@ Read these before moving a CI job from `0.1.1`.
   CI job that runs the engine against the canonical Protocol 28 pack (tag and
   `main`), and a release workflow check that the tag equals the workspace
   version.
+- `stellar-canary cache clear`: deletes the cached fixture execution results
+  under `.stellar-canary-cache` in the project root (or `--cache-dir`) and
+  reports the reclaimed disk space in a human-readable form. An empty or
+  missing cache directory reports zero bytes and exits successfully (issue
+  #490).
 
 ## [0.1.1]
 
