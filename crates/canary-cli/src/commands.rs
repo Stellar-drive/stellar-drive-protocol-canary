@@ -15,7 +15,8 @@ use canary_rpc::{validate_network_info, HttpRpcClient, RetryPolicy, RpcClient, R
 use canary_runner::EnabledSurfaces;
 
 use crate::cli::{
-    CheckArgs, FixturesArgs, FixturesFormat, InspectArgs, InspectFormat, OutputFormat, ReportArgs,
+    CacheClearArgs, CheckArgs, FixturesArgs, FixturesFormat, InspectArgs, InspectFormat,
+    OutputFormat, ReportArgs,
 };
 use crate::fixtures_json;
 use crate::inspect_json;
@@ -133,6 +134,36 @@ fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+/// The directory `check` reads and writes cached results under.
+///
+/// `--cache-dir` replaces the default `.stellar-canary-cache` in the project
+/// root; like every other caller-supplied path it is resolved against
+/// `--project-root` when one was given. The directory is created here, before
+/// any fixture runs, so a location that cannot be created (a read-only mount,
+/// or a path that runs through a regular file) is reported as a configuration
+/// error naming the flag instead of surfacing later as an opaque per-fixture
+/// cache-write failure. With `--no-cache` nothing is created, matching a run
+/// that never touches the cache.
+fn resolve_cache_dir(
+    args: &CheckArgs,
+    project_root: &ProjectRoot,
+    root: &Path,
+) -> Result<PathBuf, CanaryError> {
+    let Some(requested) = &args.cache_dir else {
+        return Ok(root.join(CACHE_DIR_NAME));
+    };
+    let dir = project_root.resolve_input(requested);
+    if !args.no_cache {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            CanaryError::Configuration(format!(
+                "--cache-dir {} could not be created: {e}",
+                dir.display()
+            ))
+        })?;
+    }
+    Ok(dir)
 }
 
 pub async fn run_check(args: CheckArgs) -> ExitCode {
@@ -295,13 +326,14 @@ async fn run_check_inner(args: CheckArgs) -> Result<ExitCode, CanaryError> {
 
     let git = collect_git_context(&CliGitRepository::new(&root));
 
+    let cache_dir = resolve_cache_dir(&args, &project_root, &root)?;
     let context = ExecutionContext {
         protocol: target_protocol,
         project: project.clone(),
         network: network_context,
         fixtures: fixture_store,
         git: git.clone(),
-        cache: CacheStore::new(root.join(CACHE_DIR_NAME)).with_policy(CachePolicy {
+        cache: CacheStore::new(cache_dir).with_policy(CachePolicy {
             enabled: !args.no_cache,
             live_max_age: args.live_cache_ttl.map(std::time::Duration::from_secs),
         }),
@@ -1143,6 +1175,70 @@ fn run_report_inner(args: ReportArgs) -> Result<ExitCode, CanaryError> {
 pub fn run_version() -> ExitCode {
     println!("stellar-canary {}", env!("CARGO_PKG_VERSION"));
     ExitCode::Pass
+}
+
+/// Deletes every cached fixture execution result under the cache directory
+/// and reports how much disk space was reclaimed.
+///
+/// The cache directory defaults to `.stellar-canary-cache` in the project
+/// root and can be overridden with `--cache-dir`. A missing or already-empty
+/// directory is not an error: it reports zero bytes reclaimed.
+pub fn run_cache_clear(args: CacheClearArgs) -> ExitCode {
+    match run_cache_clear_inner(args) {
+        Ok(exit_code) => exit_code,
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::from(&err)
+        }
+    }
+}
+
+fn run_cache_clear_inner(args: CacheClearArgs) -> Result<ExitCode, CanaryError> {
+    let project_root = ProjectRoot::resolve(args.project_root.as_deref())?;
+    let root = project_root.path.clone();
+
+    let cache_dir = match &args.cache_dir {
+        Some(requested) => project_root.resolve_input(requested),
+        None => root.join(CACHE_DIR_NAME),
+    };
+
+    let store = canary_core::CacheStore::new(cache_dir.clone());
+    let cleared = store.cache_size()?;
+    store.clear()?;
+
+    if cleared == 0 {
+        println!(
+            "The cache at {} is already empty: 0 bytes reclaimed.",
+            cache_dir.display()
+        );
+    } else {
+        println!(
+            "Cleared {} ({} bytes) from the cache at {}.",
+            format_bytes(cleared),
+            cleared,
+            cache_dir.display()
+        );
+    }
+    Ok(ExitCode::Pass)
+}
+
+/// Formats a byte count in a human-readable form (B, KiB, MiB, ...).
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[0])
+    } else {
+        format!("{:.2} {}", size, UNITS[unit])
+    }
 }
 
 #[cfg(test)]

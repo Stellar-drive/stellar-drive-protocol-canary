@@ -1,6 +1,6 @@
 # CLI Reference
 
-`stellar-canary` ships five subcommands. This reference matches the CLI
+`stellar-canary` ships six subcommands. This reference matches the CLI
 shipped in `v0.1.1`, verified directly against `stellar-canary --help`
 and each subcommand's own `--help` output.
 
@@ -10,12 +10,13 @@ Rehearse Stellar protocol upgrades before they reach your production stack.
 Usage: stellar-canary <COMMAND>
 
 Commands:
-  check     Run compatibility checks against the current project
-  inspect   Print offline project diagnostics
-  fixtures  List fixtures available for a protocol
-  report    Render a previously generated JSON report
-  version   Print the tool version
-  help      Print this message or the help of the given subcommand(s)
+  cache    Manage the local result cache
+  check    Run compatibility checks against the current project
+  inspect  Print offline project diagnostics
+  fixtures List fixtures available for a protocol
+  report   Render a previously generated JSON report
+  version  Print the tool version
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help
@@ -24,6 +25,7 @@ Options:
 
 | Command | Purpose |
 |---|---|
+| [`cache`](./cache.md) | Manage the local result cache — `cache clear` deletes cached fixture execution results and reports reclaimed disk space. |
 | [`check`](./check.md) | Run compatibility checks against the current project. The main command. |
 | [`inspect`](./inspect.md) | Print offline project diagnostics — no fixtures run, no network call. |
 | [`fixtures`](./fixtures.md) | List the fixtures a given `--fixtures-dir`/`--protocol` combination would run. |
@@ -37,8 +39,9 @@ Options:
 member of a monorepo. The path must exist and be a directory; otherwise the
 command exits with code `2`.
 
-With `--project-root`, a relative `--config`, `--fixtures-dir` or `--output`
-is resolved against that directory, not against where the command was run.
+With `--project-root`, a relative `--config`, `--fixtures-dir`, `--cache-dir`
+or `--output` is resolved against that directory, not against where the
+command was run.
 The engine never searches parent directories for a project root, so a
 manifest in a parent directory is never picked up.
 
