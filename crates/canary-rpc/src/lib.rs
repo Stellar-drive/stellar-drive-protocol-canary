@@ -14,6 +14,6 @@ pub use models::{
 };
 pub use runner::{
     observe_health, observe_latest_ledger, observe_network, DefaultRpcRunner, EventTopicsAssertion,
-    FieldAssertion, FieldRangeAssertion, JsonType, RpcFixture, RpcFixtureError, RpcMethod,
-    RpcRunner,
+    FieldAssertion, FieldOneOfAssertion, FieldRangeAssertion, JsonType, RpcFixture,
+    RpcFixtureError, RpcMethod, RpcRunner,
 };
