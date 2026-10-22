@@ -19,8 +19,9 @@ use serde_json::json;
 use canary_core::CanaryError;
 
 use crate::models::{
-    EventFilter, EventResponse, GetHealthResponse, GetLedgersResponse, GetTransactionsResponse,
-    LatestLedger, NetworkInfo, SimulationRequest, SimulationResponse,
+    EventFilter, EventResponse, FeeStatsResponse, GetHealthResponse, GetLedgerEntriesResponse,
+    GetLedgersResponse, GetTransactionsResponse, LatestLedger, NetworkInfo, SimulationRequest,
+    SimulationResponse, VersionInfoResponse,
 };
 
 /// Errors returned by the Stellar RPC client.
@@ -249,6 +250,33 @@ pub trait RpcClient {
         &self,
     ) -> impl std::future::Future<Output = Result<GetHealthResponse, RpcError>> + Send;
 
+    /// `getVersionInfo`, the endpoint's RPC and protocol build information.
+    ///
+    /// The returned [`VersionInfoResponse::observed_protocol`] is the
+    /// protocol version the endpoint itself reports, which may differ from
+    /// the network's target protocol (see [`validate_network_info`]).
+    fn get_version_info(
+        &self,
+    ) -> impl std::future::Future<Output = Result<VersionInfoResponse, RpcError>> + Send;
+
+    /// `getFeeStats`, the current inclusion-fee distributions.
+    fn get_fee_stats(
+        &self,
+    ) -> impl std::future::Future<Output = Result<FeeStatsResponse, RpcError>> + Send;
+
+    /// `getLedgerEntries` for the requested `LedgerKey` XDR values.
+    ///
+    /// Each key is a base64-encoded `LedgerKey`. At least one key and at
+    /// most 200 keys are accepted; a key that is not standard-alphabet
+    /// base64 is rejected with [`RpcError::InvalidArgument`] before a
+    /// request is sent, because the endpoint would otherwise report the
+    /// malformed key as a protocol-level error that looks like a failed
+    /// check.
+    fn get_ledger_entries(
+        &self,
+        keys: &[String],
+    ) -> impl std::future::Future<Output = Result<GetLedgerEntriesResponse, RpcError>> + Send;
+
     /// `getNetwork`'s JSON `result` object exactly as the endpoint returned
     /// it, including every field [`NetworkInfo`] does not model.
     ///
@@ -270,6 +298,26 @@ pub trait RpcClient {
     /// returned it. See [`RpcClient::get_network_raw`].
     fn get_health_raw(
         &self,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, RpcError>> + Send;
+
+    /// `getVersionInfo`'s JSON `result` object exactly as the endpoint
+    /// returned it. See [`RpcClient::get_network_raw`].
+    fn get_version_info_raw(
+        &self,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, RpcError>> + Send;
+
+    /// `getFeeStats`'s JSON `result` object exactly as the endpoint
+    /// returned it. See [`RpcClient::get_network_raw`].
+    fn get_fee_stats_raw(
+        &self,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, RpcError>> + Send;
+
+    /// `getLedgerEntries`'s JSON `result` object exactly as the endpoint
+    /// returned it, for the request parameters in `params`. See
+    /// [`RpcClient::get_network_raw`].
+    fn get_ledger_entries_raw(
+        &self,
+        params: serde_json::Value,
     ) -> impl std::future::Future<Output = Result<serde_json::Value, RpcError>> + Send;
 
     fn simulate_transaction(
@@ -756,6 +804,39 @@ fn json_kind(value: &serde_json::Value) -> &'static str {
 /// endpoint will accept.
 const MAX_GET_LEDGERS_LIMIT: u32 = 200;
 
+/// The largest number of keys `getLedgerEntries` accepts upstream.
+///
+/// The fixture engine's own bound on `[request] keys` is lower (see
+/// `crate::request::MAX_KEYS`); this one only keeps a caller of the typed
+/// method within what the endpoint will accept.
+const MAX_GET_LEDGER_ENTRY_KEYS: usize = 200;
+
+/// Builds the `getLedgerEntries` params object, rejecting arguments the
+/// method cannot accept before anything is sent.
+fn get_ledger_entries_params(keys: &[String]) -> Result<serde_json::Value, RpcError> {
+    let invalid = |reason: String| RpcError::InvalidArgument {
+        method: "getLedgerEntries".to_string(),
+        reason,
+    };
+    if keys.is_empty() {
+        return Err(invalid(
+            "keys must contain at least one base64 LedgerKey".to_string(),
+        ));
+    }
+    if keys.len() > MAX_GET_LEDGER_ENTRY_KEYS {
+        return Err(invalid(format!(
+            "keys has {} entries; at most {MAX_GET_LEDGER_ENTRY_KEYS} are accepted",
+            keys.len()
+        )));
+    }
+    for (index, key) in keys.iter().enumerate() {
+        if !crate::request::is_base64(key) {
+            return Err(invalid(format!("keys[{index}] is not a base64 string")));
+        }
+    }
+    Ok(json!({ "keys": keys }))
+}
+
 /// Builds the `getLedgers` params object, rejecting arguments the method
 /// cannot accept before anything is sent.
 ///
@@ -930,6 +1011,22 @@ impl RpcClient for HttpRpcClient {
         self.call("getHealth", json!({})).await
     }
 
+    async fn get_version_info(&self) -> Result<VersionInfoResponse, RpcError> {
+        self.call("getVersionInfo", json!({})).await
+    }
+
+    async fn get_fee_stats(&self) -> Result<FeeStatsResponse, RpcError> {
+        self.call("getFeeStats", json!({})).await
+    }
+
+    async fn get_ledger_entries(
+        &self,
+        keys: &[String],
+    ) -> Result<GetLedgerEntriesResponse, RpcError> {
+        self.call("getLedgerEntries", get_ledger_entries_params(keys)?)
+            .await
+    }
+
     async fn get_network_raw(&self) -> Result<serde_json::Value, RpcError> {
         self.call_object("getNetwork", json!({})).await
     }
@@ -940,6 +1037,21 @@ impl RpcClient for HttpRpcClient {
 
     async fn get_health_raw(&self) -> Result<serde_json::Value, RpcError> {
         self.call_object("getHealth", json!({})).await
+    }
+
+    async fn get_version_info_raw(&self) -> Result<serde_json::Value, RpcError> {
+        self.call_object("getVersionInfo", json!({})).await
+    }
+
+    async fn get_fee_stats_raw(&self) -> Result<serde_json::Value, RpcError> {
+        self.call_object("getFeeStats", json!({})).await
+    }
+
+    async fn get_ledger_entries_raw(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        self.call_object("getLedgerEntries", params).await
     }
 
     async fn simulate_transaction(

@@ -8,8 +8,9 @@ pub mod runner;
 
 pub use client::{validate_network_info, HttpRpcClient, RetryPolicy, RpcClient, RpcError};
 pub use models::{
-    GetHealthResponse, GetLedgersResponse, LatestLedger, LedgerHeaderInfo, NetworkInfo,
-    SimulationRequest, SimulationResponse,
+    FeeDistribution, FeeStatsResponse, GetHealthResponse, GetLedgerEntriesResponse,
+    GetLedgersResponse, LatestLedger, LedgerEntryResult, LedgerHeaderInfo, NetworkInfo,
+    SimulationRequest, SimulationResponse, VersionInfoResponse,
 };
 pub use runner::{
     observe_health, observe_latest_ledger, observe_network, DefaultRpcRunner, EventTopicsAssertion,
