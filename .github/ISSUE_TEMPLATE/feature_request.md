@@ -1,29 +1,16 @@
 ---
-name: Feature / enhancement
-about: Propose a change to the CLI or compatibility engine
-title: ""
+name: Feature request
+about: Suggest an idea for this project
+title: '[FEATURE] '
 labels: enhancement
+assignees: ''
 ---
 
-## Summary
+## Is your feature request related to a problem? Please describe.
+A clear and concise description of what the problem is.
 
-What should change?
+## Describe the solution you'd like
+A clear and concise description of what you want to happen.
 
-## Why it matters
-
-What compatibility gap, workflow friction, or real use case does this
-address?
-
-## Acceptance criteria
-
-- [ ]
-- [ ]
-
-## Component
-
-Which crate(s) does this touch (`canary-cli`, `canary-core`, `canary-xdr`,
-`canary-rpc`, `canary-soroban`, `canary-report`, etc.)?
-
-## Out of scope
-
-Anything explicitly not covered by this request.
+## Additional context
+Add any other context or screenshots about the feature request here.

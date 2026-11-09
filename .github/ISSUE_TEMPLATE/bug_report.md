@@ -1,36 +1,22 @@
 ---
 name: Bug report
-about: Something in stellar-canary behaves incorrectly
-title: ""
+about: Create a report to help us improve
+title: '[BUG] '
 labels: bug
+assignees: ''
 ---
 
-## Summary
+## Describe the bug
+A clear and concise description of what the bug is.
 
-What happened, and what did you expect instead?
+## To Reproduce
+Steps to reproduce the behavior.
 
-## Reproduction
+## Expected behavior
+A clear and concise description of what you expected to happen.
 
-```
-stellar-canary <command and flags>
-```
+## Screenshots
+If applicable, add screenshots to help explain your problem.
 
-Include `.stellar-canary.toml` contents if relevant, and whether you used
-`--fixtures-dir` with a `ProtocolCanary-Fixtures` checkout or a custom
-directory.
-
-## Output
-
-Paste the terminal output or `--format json` report. Redact any endpoint
-URL you don't want public; nothing else in the output should contain
-secrets (Protocol Canary never handles private keys).
-
-## Environment
-
-- `stellar-canary version` output:
-- OS:
-- Installed via: `cargo install --git ...` / local checkout / other
-
-## Exit code
-
-What exit code did the CLI return? (`stellar-canary check; echo $?`)
+## Additional context
+Add any other context about the problem here.
